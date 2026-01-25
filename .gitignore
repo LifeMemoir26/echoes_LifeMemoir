@@ -1,0 +1,23 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.env
+
+# --- IDE & System ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Logs & Temp ---
+*.log
+*.jsonl
+tmp/
+
+# --- Project Specific ---
+.data/
+.reference/
