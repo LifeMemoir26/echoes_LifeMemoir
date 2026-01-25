@@ -31,15 +31,32 @@ class QiniuAIClient:
     七牛云 AI 同步客户端
     
     使用 OpenAI 兼容的 API 格式
+    支持多个 API 密钥轮换
     """
     
     def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config or get_settings().llm
         self.base_url = self.config.base_url
+        # 支持多个 API 密钥
+        self.api_keys = self.config.api_keys if self.config.api_keys else [self.config.api_key]
+        self._key_index = 0  # 用于轮换密钥
+        
+        # 初始化第一个密钥的 headers
+        self._update_headers()
+    
+    def _update_headers(self):
+        """更新 headers 使用当前密钥"""
+        current_key = self.api_keys[self._key_index]
         self.headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
+            "Authorization": f"Bearer {current_key}",
             "Content-Type": "application/json",
         }
+    
+    def _rotate_key(self):
+        """轮换到下一个 API 密钥"""
+        self._key_index = (self._key_index + 1) % len(self.api_keys)
+        self._update_headers()
+        logger.debug(f"Rotated to API key {self._key_index + 1}/{len(self.api_keys)}")
     
     def chat(
         self,
@@ -102,6 +119,12 @@ class QiniuAIClient:
             )
             
         except httpx.HTTPStatusError as e:
+            # 如果是速率限制或其他可重试错误，尝试轮换密钥
+            if e.response.status_code in [429, 500, 502, 503, 504]:
+                logger.warning(f"API error {e.response.status_code}, rotating to next key")
+                self._rotate_key()
+                # 递归重试一次
+                return self.chat(messages, model, temperature, max_tokens, json_mode, **kwargs)
             logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
             raise
         except Exception as e:
@@ -167,15 +190,32 @@ class AsyncQiniuAIClient:
     七牛云 AI 异步客户端
     
     用于高并发场景和流式处理
+    支持多个 API 密钥轮换
     """
     
     def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config or get_settings().llm
         self.base_url = self.config.base_url
+        # 支持多个 API 密钥
+        self.api_keys = self.config.api_keys if self.config.api_keys else [self.config.api_key]
+        self._key_index = 0  # 用于轮换密钥
+        
+        # 初始化第一个密钥的 headers
+        self._update_headers()
+    
+    def _update_headers(self):
+        """更新 headers 使用当前密钥"""
+        current_key = self.api_keys[self._key_index]
         self.headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
+            "Authorization": f"Bearer {current_key}",
             "Content-Type": "application/json",
         }
+    
+    def _rotate_key(self):
+        """轮换到下一个 API 密钥"""
+        self._key_index = (self._key_index + 1) % len(self.api_keys)
+        self._update_headers()
+        logger.debug(f"Async client rotated to API key {self._key_index + 1}/{len(self.api_keys)}")
     
     async def chat(
         self,
@@ -225,6 +265,12 @@ class AsyncQiniuAIClient:
             )
             
         except httpx.HTTPStatusError as e:
+            # 如果是速率限制或其他可重试错误，尝试轮换密钥
+            if e.response.status_code in [429, 500, 502, 503, 504]:
+                logger.warning(f"API error {e.response.status_code}, rotating to next key")
+                self._rotate_key()
+                # 递归重试一次
+                return await self.chat(messages, model, temperature, max_tokens, json_mode, **kwargs)
             logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
             raise
         except Exception as e:

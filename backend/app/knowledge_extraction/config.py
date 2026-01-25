@@ -3,7 +3,7 @@ Knowledge Extraction Configuration
 知识提取模块配置
 """
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 from functools import lru_cache
 from typing import Literal
 
@@ -13,7 +13,11 @@ class LLMConfig(BaseSettings):
     # 七牛云 API 配置
     api_key: str = Field(
         default="sk-your-api-key-here",
-        description="七牛云 API Key"
+        description="七牛云 API Key (单个密钥，兼容旧配置)"
+    )
+    api_keys_str: str = Field(
+        default="sk-your-api-key-here",
+        description="七牛云 API Keys 字符串 (逗号分隔，支持多个密钥实现并发)"
     )
     base_url: str = Field(
         default="https://api.qnaigc.com/v1",
@@ -42,6 +46,11 @@ class LLMConfig(BaseSettings):
     extraction_temperature: float = Field(default=0.1, description="提取任务温度（低=精确）")
     conversation_temperature: float = Field(default=0.7, description="对话任务温度")
     max_tokens: int = Field(default=4096, description="最大生成 token 数")
+    
+    @property
+    def api_keys(self) -> list[str]:
+        """获取解析后的API密钥列表"""
+        return [key.strip() for key in self.api_keys_str.split(',') if key.strip()]
     
     class Config:
         env_prefix = "LLM_"

@@ -18,7 +18,7 @@ from ..extractors import (
     EntityExtractor, EventExtractor, TemporalExtractor,
     EmotionExtractor, StyleExtractor
 )
-from ..llm import AsyncQiniuAIClient
+from ..llm import AsyncQiniuAIClient, ConcurrencyManager
 from ..config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -71,21 +71,28 @@ class ConcurrentExtractor:
         model: Optional[str] = None,
         fast_model: Optional[str] = None,
         max_concurrent: int = 5,
+        concurrency_level: int = 2,
     ):
         settings = get_settings()
         self.model = model or settings.llm.extraction_model
         self.fast_model = fast_model or settings.llm.fast_model
         self.max_concurrent = max_concurrent
         
-        # 共享 LLM 客户端
-        self._client = AsyncQiniuAIClient()
+        # 使用并发管理器来管理API调用
+        self._concurrency_manager = ConcurrencyManager(
+            concurrency_level=concurrency_level,
+            config=settings.llm,
+        )
         
-        # 初始化所有提取器
-        self._entity_ext = EntityExtractor(self._client, model=self.model)
-        self._event_ext = EventExtractor(self._client, model=self.model)
-        self._temporal_ext = TemporalExtractor(self._client, model=self.model)
-        self._emotion_ext = EmotionExtractor(self._client, model=self.fast_model)
-        self._style_ext = StyleExtractor(self._client, model=self.fast_model)
+        # 创建多个 LLM 客户端实例以支持并发
+        self._clients = self._concurrency_manager.clients
+        
+        # 初始化所有提取器，每个提取器使用不同的客户端
+        self._entity_ext = EntityExtractor(self._clients[0], model=self.model)
+        self._event_ext = EventExtractor(self._clients[1] if len(self._clients) > 1 else self._clients[0], model=self.model)
+        self._temporal_ext = TemporalExtractor(self._clients[2] if len(self._clients) > 2 else self._clients[0], model=self.model)
+        self._emotion_ext = EmotionExtractor(self._clients[3] if len(self._clients) > 3 else self._clients[0], model=self.fast_model)
+        self._style_ext = StyleExtractor(self._clients[4] if len(self._clients) > 4 else self._clients[0], model=self.fast_model)
         
         self._adapter = DialogueAdapter()
     
