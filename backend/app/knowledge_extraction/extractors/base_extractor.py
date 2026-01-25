@@ -84,11 +84,18 @@ class BaseExtractor(ABC):
         
         if not user_prompt:
             return []
+        
+        # 从 kwargs 或实例属性获取 max_tokens
+        max_tokens = kwargs.get("max_tokens") or getattr(self, "max_tokens", None)
+        llm_kwargs = {}
+        if max_tokens:
+            llm_kwargs["max_tokens"] = max_tokens
             
         result = await self.llm_client.generate_structured(
             prompt=user_prompt,
             system_prompt=system_prompt,
             model=self.model,
+            **llm_kwargs
         )
         
         # 3. 解析响应

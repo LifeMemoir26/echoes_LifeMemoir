@@ -188,9 +188,17 @@ class StyleExtractor(BaseExtractor):
         document: StandardDocument,
         **kwargs,
     ) -> dict:
-        """准备 LLM 请求"""
-        user_content = document.user_content
-        if not user_content.strip():
+        """准备 LLM 请求 - 风格分析只使用用户的对话内容"""
+        # 风格分析只使用用户的对话内容
+        # 如果提供了user_name参数，使用正则提取
+        user_name = kwargs.get("user_name")
+        if user_name:
+            user_content = document.extract_user_content_by_name(user_name)
+        else:
+            # 否则使用默认的user_content（从turns中提取USER角色）
+            user_content = document.user_content
+            
+        if not user_content or not user_content.strip():
             return {}
             
         return {

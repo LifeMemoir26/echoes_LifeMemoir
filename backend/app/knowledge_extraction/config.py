@@ -2,8 +2,8 @@
 Knowledge Extraction Configuration
 知识提取模块配置
 """
-from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, AliasChoices
 from functools import lru_cache
 from typing import Literal
 
@@ -17,7 +17,8 @@ class LLMConfig(BaseSettings):
     )
     api_keys_str: str = Field(
         default="sk-your-api-key-here",
-        description="七牛云 API Keys 字符串 (逗号分隔，支持多个密钥实现并发)"
+        description="七牛云 API Keys 字符串 (逗号分隔，支持多个密钥实现并发)",
+        validation_alias=AliasChoices("api_keys_str", "api_keys", "LLM_API_KEYS")  # 尝试多个变量名
     )
     base_url: str = Field(
         default="https://api.qnaigc.com/v1",
@@ -45,15 +46,20 @@ class LLMConfig(BaseSettings):
     # 生成参数
     extraction_temperature: float = Field(default=0.1, description="提取任务温度（低=精确）")
     conversation_temperature: float = Field(default=0.7, description="对话任务温度")
-    max_tokens: int = Field(default=4096, description="最大生成 token 数")
+    max_tokens: int = Field(default=16384, description="最大生成 token 数（增加到16k以支持长文本）")
+    timeout: int = Field(default=180, description="API请求超时时间（秒）")
     
     @property
     def api_keys(self) -> list[str]:
         """获取解析后的API密钥列表"""
         return [key.strip() for key in self.api_keys_str.split(',') if key.strip()]
     
-    class Config:
-        env_prefix = "LLM_"
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_",
+        env_file=["backend/.env", ".env"],  # 支持多个路径
+        env_file_encoding="utf-8",
+        extra="ignore"  # 忽略额外的环境变量
+    )
 
 
 class Neo4jConfig(BaseSettings):

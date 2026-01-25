@@ -5,6 +5,7 @@
 """
 import json
 import logging
+import asyncio
 from typing import Optional, Any, AsyncGenerator, Generator
 from dataclasses import dataclass
 
@@ -38,8 +39,11 @@ class QiniuAIClient:
         self.config = config or get_settings().llm
         self.base_url = self.config.base_url
         # 支持多个 API 密钥
-        self.api_keys = self.config.api_keys if self.config.api_keys else [self.config.api_key]
+        api_keys_list = self.config.api_keys
+        self.api_keys = api_keys_list if api_keys_list else [self.config.api_key]
         self._key_index = 0  # 用于轮换密钥
+        
+        logger.info(f"QiniuAIClient initialized with {len(self.api_keys)} API keys")
         
         # 初始化第一个密钥的 headers
         self._update_headers()
@@ -97,7 +101,8 @@ class QiniuAIClient:
             data["response_format"] = {"type": "json_object"}
         
         try:
-            with httpx.Client(timeout=120.0) as client:
+            timeout = getattr(self.config, 'timeout', 180)
+            with httpx.Client(timeout=timeout) as client:
                 response = client.post(
                     f"{self.base_url}/chat/completions",
                     headers=self.headers,
@@ -197,8 +202,22 @@ class AsyncQiniuAIClient:
         self.config = config or get_settings().llm
         self.base_url = self.config.base_url
         # 支持多个 API 密钥
-        self.api_keys = self.config.api_keys if self.config.api_keys else [self.config.api_key]
+        api_keys_list = self.config.api_keys
+        self.api_keys = api_keys_list if api_keys_list else [self.config.api_key]
         self._key_index = 0  # 用于轮换密钥
+        
+        logger.info(f"AsyncQiniuAIClient initialized with {len(self.api_keys)} API keys")
+        
+        # 初始化日志目录
+        from datetime import datetime
+        from pathlib import Path
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_dir = Path(__file__).parent.parent.parent.parent / ".test" / "log" / timestamp
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._call_counter = 0
+        self._counter_lock = asyncio.Lock()
+        
+        logger.info(f"API响应日志目录: {self.log_dir}")
         
         # 初始化第一个密钥的 headers
         self._update_headers()
@@ -243,7 +262,8 @@ class AsyncQiniuAIClient:
             data["response_format"] = {"type": "json_object"}
         
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            timeout = getattr(self.config, 'timeout', 180)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=self.headers,
@@ -300,10 +320,82 @@ class AsyncQiniuAIClient:
             **kwargs,
         )
         
-        return self._parse_json_response(response.content)
+        # 记录API调用
+        await self._log_api_call(
+            request_type="generate_structured",
+            messages=messages,
+            model=model,
+            raw_response=response.content,
+            kwargs=kwargs
+        )
+        
+        return await self._parse_json_response_async(response.content)
     
-    def _parse_json_response(self, content: str) -> dict:
-        """解析 JSON 响应"""
+    async def _log_api_call(
+        self,
+        request_type: str,
+        messages: list,
+        model: str,
+        raw_response: str,
+        kwargs: dict = None
+    ):
+        """记录API调用详情到日志文件"""
+        try:
+            async with self._counter_lock:
+                self._call_counter += 1
+                call_id = self._call_counter
+            
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%H%M%S")
+            
+            # 改进：优先从system prompt内容精确判断提取器类型
+            extractor_name = "unknown"
+            for msg in messages:
+                if msg.get("role") == "system":
+                    content = msg.get("content", "")
+                    # 更精确的判断逻辑 - 按特征词的优先级
+                    if "知识图谱数据架构师" in content and "命名实体" in content:
+                        extractor_name = "entity"
+                    elif "情感侧写专家" in content or ("情感状态" in content and "EmotionSegment" in content):
+                        extractor_name = "emotion"
+                    elif "传记作家" in content and "人生事件" in content and "Event" in content:
+                        extractor_name = "event"
+                    elif "风格分析师" in content or "语言特点" in content or "SpeakingStyle" in content:
+                        extractor_name = "style"
+                    elif "时间推理" in content or "TemporalAnchor" in content:
+                        extractor_name = "temporal"
+                    # 如果上面都没匹配，使用更宽泛的判断
+                    elif "实体" in content and extractor_name == "unknown":
+                        extractor_name = "entity"
+                    elif "情感" in content and extractor_name == "unknown":
+                        extractor_name = "emotion"
+                    elif "事件" in content and extractor_name == "unknown":
+                        extractor_name = "event"
+                    break
+            
+            filename = f"{timestamp}_{call_id:04d}_{extractor_name}.json"
+            filepath = self.log_dir / filename
+            
+            log_data = {
+                "call_id": call_id,
+                "timestamp": datetime.now().isoformat(),
+                "request_type": request_type,
+                "model": model,
+                "messages": messages,
+                "kwargs": kwargs or {},
+                "raw_response": raw_response,
+                "response_length": len(raw_response),
+            }
+            
+            import json as json_module
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json_module.dump(log_data, f, ensure_ascii=False, indent=2)
+            
+        except Exception as e:
+            logger.warning(f"Failed to log API call: {e}")
+    
+    async def _parse_json_response_async(self, content: str) -> dict:
+        """异步解析 JSON 响应，失败时尝试用LLM修正"""
         try:
             content = content.strip()
             
@@ -314,11 +406,95 @@ class AsyncQiniuAIClient:
             if content.endswith("```"):
                 content = content[:-3]
             
-            return json.loads(content.strip())
+            parsed = json.loads(content.strip())
+            
+            # 处理模型返回的各种包装格式
+            # 1. {"properties": {...}} 包装
+            if isinstance(parsed, dict) and "properties" in parsed and len(parsed) == 1:
+                logger.debug("检测到 {'properties': ...} 包装格式，自动解包")
+                parsed = parsed["properties"]
+            
+            # 2. {"$PARAMETER_NAME": {...}} 包装（例如模型误解了参数说明）
+            if isinstance(parsed, dict) and len(parsed) == 1:
+                key = list(parsed.keys())[0]
+                if key.startswith("$") or key == "PARAMETER_NAME":
+                    logger.debug(f"检测到 {{'{key}': ...}} 包装格式，自动解包")
+                    parsed = parsed[key]
+            
+            return parsed
             
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse JSON response: {e}")
-            return {"raw_content": content, "parse_error": str(e)}
+            
+            # 尝试用LLM修正JSON (带超时)
+            try:
+                import asyncio
+                fixed_json = await asyncio.wait_for(
+                    self._fix_json_with_llm_async(content, str(e)),
+                    timeout=120.0  # 修正操作最多120秒
+                )
+                parsed = json.loads(fixed_json)
+                logger.info(f"✅ LLM成功修正JSON格式")
+                return parsed
+            except asyncio.TimeoutError:
+                logger.error(f"LLM修正JSON超时（120秒）")
+                return {"raw_content": content, "parse_error": str(e), "fix_timeout": True}
+            except json.JSONDecodeError as fix_e:
+                logger.error(f"LLM修正后的JSON仍然无法解析: {fix_e}")
+                return {"raw_content": content, "parse_error": str(e), "fix_error": str(fix_e)}
+            except Exception as fix_error:
+                logger.error(f"LLM修正JSON失败: {fix_error}")
+                return {"raw_content": content, "parse_error": str(e), "fix_exception": str(fix_error)}
+    
+    async def _fix_json_with_llm_async(self, broken_json: str, error_msg: str) -> str:
+        """使用LLM修正格式错误的JSON（异步版本）"""
+        logger.debug(f"错误JSON前100字符: {broken_json[:100]}...")
+        
+        # 改进prompt，更明确的指示
+        fix_prompt = f"""你是一个JSON修复专家。下面有一个格式错误的JSON字符串，错误信息是：{error_msg}
+
+请你修复这个JSON，遵循以下规则：
+1. 修复所有未闭合的字符串（添加缺少的引号）
+2. 修复错误的转义字符（如 \\" 应该是 \")
+3. 修复缺少的逗号、花括号、方括号
+4. **非常重要**：保持原有的数据内容不变，不要删除任何字段
+5. **非常重要**：输出完整的JSON，不要省略任何内容
+6. **只输出JSON**，不要有任何其他文字或解释
+
+错误的JSON：
+```json
+{broken_json}
+```
+
+请直接输出修正后的完整JSON（不要用markdown代码块包裹）："""
+
+        logger.info(f"🌐 正在调用LLM API修正JSON...")
+        
+        # 使用对话模型，增加max_tokens确保完整输出
+        response = await self.chat(
+            messages=[{"role": "user", "content": fix_prompt}],
+            model=self.config.conversation_model,  # 使用对话模型，更擅长理解指令
+            temperature=0.1,
+            max_tokens=32000,  # 增加到32k，确保能输出完整JSON
+            json_mode=False  # 不使用json_mode避免循环
+        )
+        logger.info(f"✅ LLM API调用完成，收到响应: {len(response.content)} 字符")
+        
+        fixed = response.content.strip()
+        
+        # 移除markdown代码块
+        if fixed.startswith("```json"):
+            fixed = fixed[7:]
+        if fixed.startswith("```"):
+            fixed = fixed[3:]
+        if fixed.endswith("```"):
+            fixed = fixed[:-3]
+        
+        fixed = fixed.strip()
+        logger.debug(f"修正后的JSON前100字符: {fixed[:100]}...")
+        logger.debug(f"修正后的JSON后100字符: ...{fixed[-100:]}")
+        
+        return fixed
     
     async def stream_chat(
         self,
@@ -337,7 +513,8 @@ class AsyncQiniuAIClient:
         }
         
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            timeout = getattr(self.config, 'timeout', 180)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream(
                     "POST",
                     f"{self.base_url}/chat/completions",

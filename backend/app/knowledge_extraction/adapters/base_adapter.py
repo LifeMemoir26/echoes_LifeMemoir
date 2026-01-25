@@ -88,6 +88,30 @@ class StandardDocument(BaseModel):
         """获取用户发言的拼接文本"""
         return "\n".join(t.content for t in self.user_turns)
     
+    def extract_user_content_by_name(self, user_name: str) -> str:
+        """
+        通过正则表达式提取用户对话内容
+        
+        匹配 [用户名]: 到 [Interview]: 之间的内容
+        
+        Args:
+            user_name: 用户的姓名（如"川普"）
+            
+        Returns:
+            提取出的用户对话内容
+        """
+        import re
+        
+        # 匹配 [用户名]: 到 [Interview]: 之间的内容
+        pattern = rf'\[{re.escape(user_name)}\]\s*[:：]?\s*(.*?)(?=\[Interview\]|$)'
+        matches = re.findall(pattern, self.raw_content, re.DOTALL)
+        
+        if not matches:
+            return ""
+        
+        # 合并所有匹配的用户发言
+        return "\n\n".join(match.strip() for match in matches if match.strip())
+    
     def get_context_window(self, turn_index: int, window_size: int = 3) -> list[DialogueTurn]:
         """获取某轮对话的上下文窗口"""
         start = max(0, turn_index - window_size)

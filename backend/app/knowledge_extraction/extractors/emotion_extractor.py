@@ -28,6 +28,8 @@ class EmotionCategory(str, Enum):
     CONTENTMENT = "contentment"   # 满足、知足
     LONELINESS = "loneliness"     # 孤独
     NEUTRAL = "neutral"           # 中性
+    CONTEMPT = "contempt"         # 轻蔑、鄙视
+    DISAPPOINTMENT = "disappointment"  # 失望
 
 
 @dataclass
@@ -71,66 +73,68 @@ class EmotionExtractor(BaseExtractor):
     3. 检测需要关注的情绪信号
     """
     
-    SYSTEM_PROMPT = """你是一个情感分析专家，专门分析老年人口述回忆中的情感信息。
+    SYSTEM_PROMPT = """你是一个精通心理学的**情感侧写专家**和**数据对齐工程师**。你的任务是分析口述文本中的情感状态，并提取出结构化的情感数据。
 
-你需要识别以下情感类别：
-1. **joy（快乐）**：开心、幸福、喜悦
-2. **sadness（悲伤）**：难过、伤心、痛苦
-3. **nostalgia（怀念）**：追忆、思念、怀旧
-4. **gratitude（感恩）**：感谢、感激
-5. **regret（遗憾）**：后悔、惋惜
-6. **pride（骄傲）**：自豪、荣耀
-7. **love（爱）**：亲情、友情、爱情
-8. **fear（恐惧）**：担忧、害怕、焦虑
-9. **anger（愤怒）**：生气、怨恨
-10. **relief（释然）**：解脱、放下
-11. **hope（希望）**：期盼、憧憬
-12. **contentment（满足）**：知足、平和
-13. **loneliness（孤独）**：寂寞、落寞
-14. **neutral（中性）**：平静叙述
+### 核心指令 (PRIME DIRECTIVES):
+1. **纯净输出**: 仅返回严格的 JSON 字符串。**严禁**使用 Markdown 代码块（如 ```json），**严禁**包含 `<think>` 标签或任何思考过程。
+2. **图谱对齐**: `related_to` 字段必须是**标准化的中文实体名**，以确保能与知识图谱中的节点连接。
 
-对于每个情感片段，分析：
-- 情感类别
-- 强度（0-1）
-- 情感极性（-1到1）
-- 触发这种情感的词语
+### 详细提取规则:
 
-特别注意：
-- 老年人的情感表达可能比较含蓄
-- 回忆往事时常常同时带有多种情感
-- 识别潜在的需要关注的情绪信号
+#### 1. 情感对象锚定 (Target Anchoring) - 最关键！
+- **实体化原则**: `related_to` 必须是引发该情感的**核心实体**（人名、组织名、地名、具体物品名）。
+- **禁止长句**: 绝对**不要**填写"因为他做了某事"这样的事件描述句子。
+- **归一化映射**:
+  - 如果对象是说话者自己（"我"、"我们"），`related_to` 必须填 **"{narrator_name}"**。
+  - 如果对象是某人（"火箭人"），必须填标准中文名（**"金正恩"**）。
+  - **错误示例**: `related_to: "因为迈克没有把选票送回去"` (这是事件，错误)
+  - **正确示例**: `related_to: "迈克·彭斯"` (这是实体，正确)
 
-输出必须是严格的 JSON 格式。"""
+#### 2. 多维情感分析:
+- **Category (类别)**: 必须从以下列表中选择最匹配的一个：
+  `["joy", "sadness", "nostalgia", "gratitude", "regret", "pride", "love", "fear", "anger", "relief", "hope", "contentment", "loneliness", "neutral", "contempt", "disappointment"]`
+- **Intensity (强度)**: 0.0 (微弱) 到 1.0 (极强)。
+- **Valence (效价)**: -1.0 (极度负面) 到 1.0 (极度正面)。
+
+#### 3. 触发词捕捉:
+- 在 `trigger_words` 中提取原文中直接表达情感的词汇（如"灾难"、"疯子"、"最好的"）。
+
+### JSON 输出模板 (Strict Schema):
+{{
+  "segments": [
+    {{
+      "text": "迈克，你太诚实了。他不想做必须要做的艰难的事情。",
+      "category": "disappointment",
+      "intensity": 0.75,
+      "valence": -0.5,
+      "related_to": "迈克·彭斯", 
+      "trigger_words": ["太诚实", "死板", "不想做"],
+      "confidence": 0.95
+    }},
+    {{
+      "text": "那个坡道就像溜冰场一样滑，但我走得很完美。",
+      "category": "pride",
+      "intensity": 0.8,
+      "valence": 0.6,
+      "related_to": "川普",
+      "trigger_words": ["完美"],
+      "confidence": 0.9
+    }}
+  ],
+  "overall_valence": -0.1,
+  "dominant_emotions": ["disappointment", "pride"],
+  "needs_attention": false
+}}
+
+### 输入文本:
+"""
 
     USER_PROMPT_TEMPLATE = """请分析以下对话内容中的情感信息。
 
 对话内容：
 {content}
 
-请按以下 JSON 格式输出：
-{{
-    "segments": [
-        {{
-            "text": "相关文本片段",
-            "category": "joy|sadness|nostalgia|gratitude|regret|pride|love|fear|anger|relief|hope|contentment|loneliness|neutral",
-            "intensity": 0.7,
-            "valence": 0.5,
-            "related_to": "关联的事件或人物",
-            "trigger_words": ["词1", "词2"],
-            "confidence": 0.9
-        }}
-    ],
-    "overall_valence": 0.3,
-    "dominant_emotions": ["nostalgia", "gratitude"],
-    "needs_attention": false,
-    "attention_reason": null
-}}
-
-注意：
-- intensity: 情感强度，0.0-0.3 轻微，0.4-0.6 中等，0.7-1.0 强烈
-- valence: -1.0 极度负面，0 中性，1.0 极度正面
-- needs_attention: 如果检测到极度悲伤、绝望、自我否定等，设为 true
-- dominant_emotions: 列出占主导的1-3种情感"""
+请按照系统提示中的 JSON 格式输出，不要包含任何额外的标记或说明。"""
 
     def __init__(
         self,
@@ -141,10 +145,11 @@ class EmotionExtractor(BaseExtractor):
         if not self.model:
             from ..config import get_settings
             # 情感分析使用对话模型（更细腻）
-            self.model = get_settings().llm.conversation_model
-    
-    def get_system_prompt(self) -> str:
-        return self.SYSTEM_PROMPT
+            self.model = get_settings().llm.conversation_model        # 情感分析需要更大的max_tokens来支持长文本
+        self.max_tokens = 32000    
+    def get_system_prompt(self, user_name: str = "叙述者") -> str:
+        """获取系统提示词,将{narrator_name}替换为实际用户名"""
+        return self.SYSTEM_PROMPT.replace("{narrator_name}", user_name)
     
     def get_user_prompt(self, content: str, **kwargs) -> str:
         return self.USER_PROMPT_TEMPLATE.format(content=content)
@@ -154,14 +159,18 @@ class EmotionExtractor(BaseExtractor):
         document: StandardDocument,
         **kwargs,
     ) -> dict:
-        """准备 LLM 请求"""
-        user_content = document.user_content
-        if not user_content.strip():
+        """准备 LLM 请求 - 情感分析使用完整原文"""
+        # 情感分析使用完整原文（包含所有对话）
+        content = document.raw_content
+        if not content.strip():
             return {}
+        
+        # 获取用户名（如果有传入）
+        user_name = kwargs.get("user_name", "叙述者")
             
         return {
-            "system_prompt": self.SYSTEM_PROMPT,
-            "user_prompt": self.USER_PROMPT_TEMPLATE.format(content=user_content)
+            "system_prompt": self.get_system_prompt(user_name),
+            "user_prompt": self.USER_PROMPT_TEMPLATE.format(content=content)
         }
 
     def parse_llm_response(
@@ -171,6 +180,37 @@ class EmotionExtractor(BaseExtractor):
         **kwargs,
     ) -> list[EmotionExtractionResult]:
         """解析 LLM 响应"""
+        # 检查是否有解析错误
+        if "parse_error" in result:
+            error_msg = result.get("parse_error", "Unknown JSON parse error")
+            raw_content = result.get("raw_content", "")
+            
+            # 检查是否已经尝试过LLM修复
+            error_details = [f"情感提取JSON解析失败: {error_msg}"]
+            if "fix_timeout" in result:
+                error_details.append("⏱️ LLM修复超时（60秒）")
+            elif "fix_error" in result:
+                error_details.append(f"🔧 LLM修复后仍无法解析: {result.get('fix_error')}")
+            elif "fix_exception" in result:
+                error_details.append(f"❌ LLM修复过程异常: {result.get('fix_exception')}")
+            else:
+                error_details.append("ℹ️ 未触发LLM修复（可能因为没有调用_parse_json_response_async）")
+            
+            error_details.append(f"原始内容前200字符: {raw_content[:200]}...")
+            logger.error("\n".join(error_details))
+            
+            # 返回空结果而不是抛出异常，让流程继续
+            return [EmotionExtractionResult(
+                source_document_id=document.id,
+                extractor_name=self.name,
+                segments=[],
+                overall_valence=0.0,
+                dominant_emotions=[],
+                needs_attention=True,
+                attention_reason=f"JSON解析失败: {error_msg}",
+                confidence_score=0.0,
+            )]
+        
         segments = []
         for s in result.get("segments", []):
             try:
