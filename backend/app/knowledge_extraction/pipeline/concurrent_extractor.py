@@ -63,15 +63,15 @@ class ConcurrentExtractor:
     """
     
     # 文本拆分配置
-    MAX_CHUNK_SIZE = 8000  # 单个chunk最大字符数
-    OVERLAP_SIZE = 500     # chunk之间的重叠字符数
+    MAX_CHUNK_SIZE = 8000  # 单个 chunk 窗口大小约
+    STEP_SIZE = 4000       # 滑动步长约（50%重叠）
     
     def __init__(
         self,
         model: Optional[str] = None,
         fast_model: Optional[str] = None,
         max_concurrent: int = 5,
-        concurrency_level: int = 2,
+        concurrency_level: int = 7,  # 默认7个并发
     ):
         settings = get_settings()
         self.model = model or settings.llm.extraction_model
@@ -98,61 +98,104 @@ class ConcurrentExtractor:
     
     def _split_text(self, text: str) -> List[str]:
         """
-        智能拆分长文本
+        使用滑动窗口拆分对话文本
+        
+        对话格式：
+        - [Interview]: 开始一个问题
+        - [User]: 开始用户回答
+        - 一个完整的对话轮次 = [Interview]: ... [User]: ...
         
         策略：
-        1. 按段落拆分（保持语义完整）
-        2. 控制每个chunk大小在阈值内
-        3. chunk之间有重叠以保持上下文连续性
+        1. 窗口大小：8000字符
+        2. 步长：4000字符（50%重叠）
+        3. 在窗口边缘寻找最近的 [Interview]: 标记来截断（保证从新对话轮次开始）
+        4. 保持对话的完整性
         """
-        if len(text) <= self.MAX_CHUNK_SIZE:
+        text_len = len(text)
+        
+        if text_len <= self.MAX_CHUNK_SIZE:
             return [text]
         
-        # 按段落分割
-        paragraphs = re.split(r'\n\n+', text)
-        
         chunks = []
-        current_chunk = []
-        current_size = 0
+        start = 0
         
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
+        # 预编译正则表达式，匹配对话开始标记（只匹配 [Interview]: 确保从完整对话开始）
+        dialogue_start_pattern = re.compile(r'\[Interview\]:', re.IGNORECASE)
+        
+        while start < text_len:
+            # 确定当前窗口的结束位置
+            end = min(start + self.MAX_CHUNK_SIZE, text_len)
             
-            para_size = len(para)
+            # 如果不是最后一个窗口，寻找边缘附近最近的对话开始标记 [Interview]:
+            if end < text_len:
+                # 在窗口结束位置前后1000字符范围内搜索最近的 [Interview]: 标记
+                search_start = max(end - 1000, start)
+                search_end = min(end + 1000, text_len)
+                search_text = text[search_start:search_end]
+                
+                # 找到所有对话开始标记的位置
+                matches = list(dialogue_start_pattern.finditer(search_text))
+                
+                if matches:
+                    # 找到距离原始end位置最近的 [Interview]: 标记
+                    closest_match = min(
+                        matches,
+                        key=lambda m: abs((search_start + m.start()) - end)
+                    )
+                    # 在实际文本中的位置
+                    actual_pos = search_start + closest_match.start()
+                    end = actual_pos
             
-            # 如果单个段落就超过限制，强制按句子拆分
-            if para_size > self.MAX_CHUNK_SIZE:
-                sentences = re.split(r'([。！？\n])', para)
-                for i in range(0, len(sentences), 2):
-                    sent = sentences[i] + (sentences[i+1] if i+1 < len(sentences) else '')
-                    if current_size + len(sent) > self.MAX_CHUNK_SIZE and current_chunk:
-                        chunks.append('\n\n'.join(current_chunk))
-                        # 保留最后一部分作为重叠
-                        overlap_text = current_chunk[-1] if current_chunk else ''
-                        current_chunk = [overlap_text, sent] if overlap_text else [sent]
-                        current_size = len(overlap_text) + len(sent)
-                    else:
-                        current_chunk.append(sent)
-                        current_size += len(sent)
-            # 正常段落
-            elif current_size + para_size > self.MAX_CHUNK_SIZE and current_chunk:
-                # 当前chunk已满，保存并创建新chunk
-                chunks.append('\n\n'.join(current_chunk))
-                # 保留最后一段作为重叠
-                overlap_text = current_chunk[-1] if len(current_chunk[-1]) < self.OVERLAP_SIZE else ''
-                current_chunk = [overlap_text, para] if overlap_text else [para]
-                current_size = len(overlap_text) + para_size
+            # 提取当前窗口的文本
+            chunk = text[start:end].strip()
+            
+            if chunk:
+                chunks.append(chunk)
+                logger.debug(
+                    f"切分窗口: start={start}, end={end}, "
+                    f"size={len(chunk)}, total_progress={end}/{text_len}"
+                )
+            
+            # 移动到下一个窗口（使用步长）
+            # 如果是最后一个窗口，则结束
+            if end >= text_len:
+                break
+            
+            # 下一个窗口的起始位置
+            next_start = start + self.STEP_SIZE
+            
+            # 在下一个窗口起始位置附近寻找 [Interview]: 标记，确保从完整对话开始
+            if next_start < text_len:
+                # 在步长位置前后搜索 [Interview]: 标记
+                search_range_start = max(next_start - 500, start)
+                search_range_end = min(next_start + 500, text_len)
+                search_text = text[search_range_start:search_range_end]
+                
+                # 找到最接近 next_start 的 [Interview]: 标记
+                matches = list(dialogue_start_pattern.finditer(search_text))
+                
+                if matches:
+                    # 找到距离 next_start 最近的标记
+                    closest_match = min(
+                        matches,
+                        key=lambda m: abs((search_range_start + m.start()) - next_start)
+                    )
+                    start = search_range_start + closest_match.start()
+                else:
+                    # 如果没找到标记，直接使用步长位置
+                    start = next_start
             else:
-                current_chunk.append(para)
-                current_size += para_size
+                start = next_start
         
-        # 添加最后一个chunk
-        if current_chunk:
-            chunks.append('\n\n'.join(current_chunk))
+        logger.info(
+            f"滑动窗口切分完成: {text_len}字符 -> {len(chunks)}个窗口 "
+            f"(窗口大小={self.MAX_CHUNK_SIZE}, 步长={self.STEP_SIZE})"
+        )
         
-        logger.info(f"文本拆分: {len(text)}字符 -> {len(chunks)}个chunk")
+        # 输出每个窗口的详细信息
+        for i, chunk in enumerate(chunks):
+            logger.debug(f"窗口 {i+1}: {len(chunk)}字符, 开头={chunk[:50]}...")
+        
         return chunks
     
     async def extract(
