@@ -7,6 +7,7 @@ import uuid
 import logging
 from typing import Optional, Any
 from datetime import datetime
+from dataclasses import dataclass, field
 
 from .neo4j_client import Neo4jClient
 from ..extractors.entity_extractor import EntityExtractionResult, Entity, EntityRelation
@@ -16,6 +17,34 @@ from ..extractors.emotion_extractor import EmotionExtractionResult, EmotionSegme
 from ..extractors.style_extractor import StyleExtractionResult, SpeakingStyle
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BatchWriteResult:
+    """
+    批量写入结果
+    
+    记录成功和失败的项目，方便后续重试
+    """
+    success_ids: list[str] = field(default_factory=list)
+    failed_items: list[dict] = field(default_factory=list)  # 包含原始数据和错误信息
+    total_count: int = 0
+    success_count: int = 0
+    
+    @property
+    def has_failures(self) -> bool:
+        return len(self.failed_items) > 0
+    
+    def add_success(self, item_id: str) -> None:
+        self.success_ids.append(item_id)
+        self.success_count += 1
+    
+    def add_failure(self, item_data: dict, error: str) -> None:
+        self.failed_items.append({
+            "data": item_data,
+            "error": str(error),
+            "timestamp": datetime.now().isoformat(),
+        })
 
 
 class GraphWriter:
@@ -682,3 +711,576 @@ class GraphWriter:
             "session_id": session_id,
         })
         return result[0]["id"] if result else document_id
+    
+    # ==================== 批量写入方法（性能优化） ====================
+    
+    async def write_entities_batch(
+        self,
+        user_id: str,
+        extraction_result: EntityExtractionResult,
+        embeddings: Optional[dict[str, list[float]]] = None,
+        batch_size: int = 100,
+    ) -> BatchWriteResult:
+        """
+        使用 UNWIND 批量写入所有实体（性能优化版本）
+        
+        Args:
+            user_id: 用户 ID
+            extraction_result: 实体提取结果
+            embeddings: 实体名称 -> 向量 的映射
+            batch_size: 每批写入的最大数量
+            
+        Returns:
+            BatchWriteResult: 包含成功ID列表和失败项列表
+        """
+        embeddings = embeddings or {}
+        result = BatchWriteResult()
+        
+        try:
+            entities = getattr(extraction_result, 'entities', None) or []
+            result.total_count = len(entities)
+            
+            if not entities:
+                return result
+            
+            # 按实体类型分组
+            persons: list[dict] = []
+            locations: list[dict] = []
+            
+            for entity in entities:
+                try:
+                    name = getattr(entity, 'name', None)
+                    if not name:
+                        continue
+                    
+                    entity_type_value = None
+                    if hasattr(entity.entity_type, 'value'):
+                        entity_type_value = entity.entity_type.value
+                    else:
+                        entity_type_value = str(entity.entity_type).lower()
+                    
+                    entity_id = str(uuid.uuid4())
+                    
+                    if entity_type_value == "person":
+                        description = getattr(entity, 'description', None) or ""
+                        aliases = getattr(entity, 'aliases', None) or []
+                        attributes = getattr(entity, 'attributes', {}) or {}
+                        relationship = attributes.get("relationship_to_narrator", "")
+                        
+                        persons.append({
+                            "id": entity_id,
+                            "name": name,
+                            "description": description,
+                            "relationship": relationship,
+                            "aliases": aliases,
+                            "embedding": embeddings.get(name),
+                        })
+                    elif entity_type_value == "location":
+                        attributes = getattr(entity, 'attributes', {}) or {}
+                        location_type = attributes.get("location_type", "")
+                        
+                        locations.append({
+                            "id": entity_id,
+                            "name": name,
+                            "location_type": location_type,
+                            "embedding": embeddings.get(name),
+                        })
+                except Exception as e:
+                    result.add_failure({"name": getattr(entity, 'name', 'unknown')}, str(e))
+            
+            # 批量写入 Person 实体
+            if persons:
+                for i in range(0, len(persons), batch_size):
+                    batch = persons[i:i + batch_size]
+                    try:
+                        ids = await self._batch_write_persons(user_id, batch)
+                        for item_id in ids:
+                            result.add_success(item_id)
+                    except Exception as e:
+                        logger.error(f"批量写入 Person 失败: {e}", exc_info=True)
+                        for item in batch:
+                            result.add_failure(item, str(e))
+            
+            # 批量写入 Location 实体
+            if locations:
+                for i in range(0, len(locations), batch_size):
+                    batch = locations[i:i + batch_size]
+                    try:
+                        ids = await self._batch_write_locations(batch)
+                        for item_id in ids:
+                            result.add_success(item_id)
+                    except Exception as e:
+                        logger.error(f"批量写入 Location 失败: {e}", exc_info=True)
+                        for item in batch:
+                            result.add_failure(item, str(e))
+            
+            # 批量写入关系
+            relations = getattr(extraction_result, 'relations', None) or []
+            if relations:
+                try:
+                    await self._batch_write_entity_relations(relations)
+                except Exception as e:
+                    logger.error(f"批量写入实体关系失败: {e}", exc_info=True)
+                    
+        except Exception as e:
+            logger.error(f"批量写入实体失败: {e}", exc_info=True)
+        
+        return result
+    
+    async def _batch_write_persons(
+        self,
+        user_id: str,
+        batch_data: list[dict],
+    ) -> list[str]:
+        """批量写入 Person 实体"""
+        if not batch_data:
+            return []
+        
+        cypher = """
+        UNWIND $batch_data AS item
+        MERGE (p:Person {name: item.name})
+        ON CREATE SET
+            p.id = item.id,
+            p.created_at = datetime()
+        SET
+            p.description = COALESCE(item.description, p.description),
+            p.relationship_to_user = COALESCE(item.relationship, p.relationship_to_user),
+            p.aliases = COALESCE(item.aliases, p.aliases),
+            p.embedding = COALESCE(item.embedding, p.embedding)
+        
+        WITH p, item
+        MATCH (u:User {id: $user_id})
+        MERGE (u)-[:KNOWS {relationship: item.relationship}]->(p)
+        
+        RETURN p.id as id
+        """
+        
+        result = await self.client.execute_write(cypher, {
+            "batch_data": batch_data,
+            "user_id": user_id,
+        })
+        return [r["id"] for r in result]
+    
+    async def _batch_write_locations(self, batch_data: list[dict]) -> list[str]:
+        """批量写入 Location 实体"""
+        if not batch_data:
+            return []
+        
+        cypher = """
+        UNWIND $batch_data AS item
+        MERGE (l:Location {name: item.name})
+        ON CREATE SET
+            l.id = item.id,
+            l.created_at = datetime()
+        SET
+            l.location_type = COALESCE(item.location_type, l.location_type),
+            l.embedding = COALESCE(item.embedding, l.embedding)
+        
+        RETURN l.id as id
+        """
+        
+        result = await self.client.execute_write(cypher, {"batch_data": batch_data})
+        return [r["id"] for r in result]
+    
+    async def _batch_write_entity_relations(self, relations: list[EntityRelation]) -> None:
+        """批量写入实体间关系"""
+        if not relations:
+            return
+        
+        relation_data = []
+        for relation in relations:
+            source = getattr(relation, 'source_entity', None)
+            target = getattr(relation, 'target_entity', None)
+            if not source or not target:
+                continue
+            
+            relation_data.append({
+                "source": source,
+                "target": target,
+                "relation_type": getattr(relation, 'relation_type', None) or "RELATED_TO",
+                "description": getattr(relation, 'description', None) or "",
+                "confidence": getattr(relation, 'confidence', None) or 0.5,
+            })
+        
+        if not relation_data:
+            return
+        
+        cypher = """
+        UNWIND $batch_data AS item
+        MATCH (a:Person {name: item.source})
+        MATCH (b:Person {name: item.target})
+        MERGE (a)-[r:RELATED_TO {relation_type: item.relation_type}]->(b)
+        SET r.description = item.description,
+            r.confidence = item.confidence
+        """
+        
+        await self.client.execute_write(cypher, {"batch_data": relation_data})
+    
+    async def write_events_batch(
+        self,
+        user_id: str,
+        extraction_result: EventExtractionResult,
+        temporal_result: Optional[TemporalExtractionResult] = None,
+        embeddings: Optional[dict[str, list[float]]] = None,
+        source_document_id: Optional[str] = None,
+        batch_size: int = 50,
+    ) -> BatchWriteResult:
+        """
+        使用 UNWIND 批量写入所有事件（性能优化版本）
+        
+        Args:
+            user_id: 用户 ID
+            extraction_result: 事件提取结果
+            temporal_result: 时间提取结果（用于关联时间点）
+            embeddings: 事件描述 -> 向量 的映射
+            source_document_id: 来源文档 ID
+            batch_size: 每批写入的最大数量
+            
+        Returns:
+            BatchWriteResult: 包含成功ID列表和失败项列表
+        """
+        embeddings = embeddings or {}
+        result = BatchWriteResult()
+        
+        try:
+            # 构建时间表达式到锚点的映射
+            temporal_map = {}
+            if temporal_result:
+                temporal_anchors = getattr(temporal_result, 'temporal_anchors', None) or []
+                for anchor in temporal_anchors:
+                    original_expr = getattr(anchor, 'original_expression', None)
+                    if original_expr:
+                        temporal_map[original_expr] = anchor
+            
+            events = getattr(extraction_result, 'events', None) or []
+            result.total_count = len(events)
+            
+            if not events:
+                return result
+            
+            # 准备事件数据
+            event_data_list: list[dict] = []
+            for event in events:
+                try:
+                    description = getattr(event, 'description', None)
+                    if not description:
+                        continue
+                    
+                    # 查找对应的时间锚点
+                    year = None
+                    time_expression = getattr(event, 'time_expression', None)
+                    if time_expression:
+                        temporal_anchor = temporal_map.get(time_expression)
+                        if temporal_anchor:
+                            year = getattr(temporal_anchor, 'best_year_estimate', None)
+                    
+                    event_type_value = "general"
+                    event_type = getattr(event, 'event_type', None)
+                    if event_type:
+                        if hasattr(event_type, 'value'):
+                            event_type_value = event_type.value
+                        else:
+                            event_type_value = str(event_type)
+                    
+                    event_data_list.append({
+                        "id": str(uuid.uuid4()),
+                        "description": description,
+                        "event_type": event_type_value,
+                        "year": year,
+                        "time_expression": time_expression,
+                        "location": getattr(event, 'location', None),
+                        "importance_score": getattr(event, 'importance_score', None) or 0.5,
+                        "keywords": getattr(event, 'keywords', None) or [],
+                        "embedding": embeddings.get(description),
+                        "source_document_id": source_document_id,
+                        "confidence": getattr(event, 'confidence', None) or 0.5,
+                        "participants": getattr(event, 'participants', None) or [],
+                    })
+                except Exception as e:
+                    result.add_failure({"description": getattr(event, 'description', 'unknown')}, str(e))
+            
+            # 批量写入事件
+            for i in range(0, len(event_data_list), batch_size):
+                batch = event_data_list[i:i + batch_size]
+                try:
+                    ids = await self._batch_write_events(user_id, batch)
+                    for item_id in ids:
+                        result.add_success(item_id)
+                except Exception as e:
+                    logger.error(f"批量写入事件失败: {e}", exc_info=True)
+                    for item in batch:
+                        result.add_failure(item, str(e))
+            
+            # 批量创建时间点关系
+            events_with_year = [e for e in event_data_list if e.get("year")]
+            if events_with_year:
+                await self._batch_create_timepoint_relations(events_with_year)
+            
+            # 批量创建地点关系
+            events_with_location = [e for e in event_data_list if e.get("location")]
+            if events_with_location:
+                await self._batch_create_location_relations(events_with_location)
+            
+            # 批量创建参与者关系
+            await self._batch_create_participant_relations(event_data_list)
+            
+            # 维护时间顺序链
+            await self._maintain_temporal_chain(user_id)
+            
+        except Exception as e:
+            logger.error(f"批量写入事件提取结果失败: {e}", exc_info=True)
+        
+        return result
+    
+    async def _batch_write_events(
+        self,
+        user_id: str,
+        batch_data: list[dict],
+    ) -> list[str]:
+        """批量写入 Event 节点"""
+        if not batch_data:
+            return []
+        
+        cypher = """
+        UNWIND $batch_data AS item
+        CREATE (e:Event {
+            id: item.id,
+            description: item.description,
+            event_type: item.event_type,
+            year: item.year,
+            time_expression: item.time_expression,
+            location: item.location,
+            importance_score: item.importance_score,
+            sentiment_score: 0.0,
+            keywords: item.keywords,
+            embedding: item.embedding,
+            source_document_id: item.source_document_id,
+            confidence_score: item.confidence,
+            created_at: datetime()
+        })
+        WITH e, item
+        MATCH (u:User {id: $user_id})
+        MERGE (u)-[:EXPERIENCED]->(e)
+        RETURN e.id as id
+        """
+        
+        result = await self.client.execute_write(cypher, {
+            "batch_data": batch_data,
+            "user_id": user_id,
+        })
+        return [r["id"] for r in result]
+    
+    async def _batch_create_timepoint_relations(self, event_data_list: list[dict]) -> None:
+        """批量创建事件与时间点的关联"""
+        if not event_data_list:
+            return
+        
+        # 准备数据
+        data = [{"event_id": e["id"], "year": e["year"]} for e in event_data_list if e.get("year")]
+        if not data:
+            return
+        
+        cypher = """
+        UNWIND $batch_data AS item
+        MERGE (t:TimePoint {year: item.year})
+        ON CREATE SET t.id = randomUUID()
+        WITH t, item
+        MATCH (e:Event {id: item.event_id})
+        MERGE (e)-[:OCCURRED_AT]->(t)
+        """
+        
+        await self.client.execute_write(cypher, {"batch_data": data})
+    
+    async def _batch_create_location_relations(self, event_data_list: list[dict]) -> None:
+        """批量创建事件与地点的关联"""
+        if not event_data_list:
+            return
+        
+        data = [{"event_id": e["id"], "location": e["location"]} 
+                for e in event_data_list if e.get("location")]
+        if not data:
+            return
+        
+        cypher = """
+        UNWIND $batch_data AS item
+        MERGE (l:Location {name: item.location})
+        ON CREATE SET l.id = randomUUID()
+        WITH l, item
+        MATCH (e:Event {id: item.event_id})
+        MERGE (e)-[:HAPPENED_IN]->(l)
+        """
+        
+        await self.client.execute_write(cypher, {"batch_data": data})
+    
+    async def _batch_create_participant_relations(self, event_data_list: list[dict]) -> None:
+        """批量创建事件与参与者的关联"""
+        # 展开参与者列表
+        data = []
+        for event in event_data_list:
+            event_id = event.get("id")
+            participants = event.get("participants", []) or []
+            for person_name in participants:
+                if person_name:
+                    data.append({"event_id": event_id, "person_name": person_name})
+        
+        if not data:
+            return
+        
+        cypher = """
+        UNWIND $batch_data AS item
+        MERGE (p:Person {name: item.person_name})
+        ON CREATE SET p.id = randomUUID()
+        WITH p, item
+        MATCH (e:Event {id: item.event_id})
+        MERGE (e)-[:INVOLVED]->(p)
+        """
+        
+        await self.client.execute_write(cypher, {"batch_data": data})
+    
+    async def write_emotions_batch(
+        self,
+        event_ids: list[str],
+        extraction_result: EmotionExtractionResult,
+        batch_size: int = 100,
+    ) -> BatchWriteResult:
+        """
+        使用批量操作写入情感（性能优化版本）
+        
+        Args:
+            event_ids: 关联的事件 ID 列表
+            extraction_result: 情感提取结果
+            batch_size: 每批写入的最大数量
+            
+        Returns:
+            BatchWriteResult: 包含成功ID列表和失败项列表
+        """
+        result = BatchWriteResult()
+        
+        try:
+            segments = getattr(extraction_result, 'segments', None) or []
+            result.total_count = len(segments)
+            
+            if not segments:
+                return result
+            
+            # 准备情感数据
+            emotion_data_list: list[dict] = []
+            for segment in segments:
+                try:
+                    category_value = "neutral"
+                    category = getattr(segment, 'category', None)
+                    if category:
+                        if hasattr(category, 'value'):
+                            category_value = category.value
+                        else:
+                            category_value = str(category)
+                    
+                    emotion_data_list.append({
+                        "id": str(uuid.uuid4()),
+                        "category": category_value,
+                        "intensity": getattr(segment, 'intensity', None) or 0.5,
+                        "valence": getattr(segment, 'valence', None) or 0.0,
+                        "related_to": getattr(segment, 'related_to', None),
+                    })
+                except Exception as e:
+                    result.add_failure({"category": "unknown"}, str(e))
+            
+            # 批量写入情感
+            for i in range(0, len(emotion_data_list), batch_size):
+                batch = emotion_data_list[i:i + batch_size]
+                try:
+                    ids = await self._batch_write_emotions(batch, event_ids)
+                    for item_id in ids:
+                        result.add_success(item_id)
+                except Exception as e:
+                    logger.error(f"批量写入情感失败: {e}", exc_info=True)
+                    for item in batch:
+                        result.add_failure(item, str(e))
+                        
+        except Exception as e:
+            logger.error(f"批量写入情感提取结果失败: {e}", exc_info=True)
+        
+        return result
+    
+    async def _batch_write_emotions(
+        self,
+        batch_data: list[dict],
+        event_ids: list[str],
+    ) -> list[str]:
+        """批量写入 Emotion 节点"""
+        if not batch_data:
+            return []
+        
+        # 先创建情感节点
+        cypher_create = """
+        UNWIND $batch_data AS item
+        CREATE (em:Emotion {
+            id: item.id,
+            category: item.category,
+            intensity: item.intensity,
+            valence: item.valence
+        })
+        RETURN em.id as id
+        """
+        
+        result = await self.client.execute_write(cypher_create, {"batch_data": batch_data})
+        created_ids = [r["id"] for r in result]
+        
+        # 如果有事件 ID，创建关联（关联到第一个事件）
+        if event_ids and created_ids:
+            first_event_id = event_ids[0]
+            cypher_link = """
+            UNWIND $emotion_ids AS emotion_id
+            MATCH (e:Event {id: $event_id})
+            MATCH (em:Emotion {id: emotion_id})
+            MERGE (e)-[:EVOKED]->(em)
+            """
+            await self.client.execute_write(cypher_link, {
+                "emotion_ids": created_ids,
+                "event_id": first_event_id,
+            })
+        
+        return created_ids
+    
+    async def retry_failed_items(
+        self,
+        user_id: str,
+        failed_result: BatchWriteResult,
+        item_type: str = "entity",
+    ) -> BatchWriteResult:
+        """
+        重试失败的项目
+        
+        Args:
+            user_id: 用户 ID
+            failed_result: 之前的失败结果
+            item_type: 项目类型 ("entity" 或 "event")
+            
+        Returns:
+            BatchWriteResult: 重试结果
+        """
+        retry_result = BatchWriteResult()
+        retry_result.total_count = len(failed_result.failed_items)
+        
+        for failed_item in failed_result.failed_items:
+            item_data = failed_item.get("data", {})
+            try:
+                if item_type == "entity":
+                    # 单个重试 Person
+                    if "relationship" in item_data:
+                        ids = await self._batch_write_persons(user_id, [item_data])
+                        if ids:
+                            retry_result.add_success(ids[0])
+                    # 单个重试 Location
+                    elif "location_type" in item_data:
+                        ids = await self._batch_write_locations([item_data])
+                        if ids:
+                            retry_result.add_success(ids[0])
+                elif item_type == "event":
+                    ids = await self._batch_write_events(user_id, [item_data])
+                    if ids:
+                        retry_result.add_success(ids[0])
+            except Exception as e:
+                retry_result.add_failure(item_data, str(e))
+        
+        return retry_result

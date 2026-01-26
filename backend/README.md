@@ -45,10 +45,9 @@ cp .env.example .env
 
 ```bash
 # 使用命令行脚本
-python scripts/process_dialogue.py \
-    --input tests/sample_dialogue.txt \
-    --user-id grandpa_wang \
-    --birth-year 1950 \
+python backend/scripts/process_dialogue.py \
+    --input backend/.test/sample_dialogue.txt \
+    --user-id 川普 \
     --verbose
 ```
 

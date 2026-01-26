@@ -16,7 +16,6 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
-from ..adapters.dialogue_adapter import DialogueAdapter
 from ..adapters.base_adapter import StandardDocument
 from ..extractors.entity_extractor import EntityExtractor
 from ..extractors.event_extractor import EventExtractor
@@ -67,33 +66,31 @@ class ConcurrentExtractionService:
     
     def __init__(
         self,
-        neo4j_uri: Optional[str] = None,
-        neo4j_user: Optional[str] = None,
-        neo4j_password: Optional[str] = None,
         log_base_dir: Optional[Path] = None,
+        verbose: bool = False,
     ):
         """
         初始化服务
         
         Args:
-            neo4j_uri: Neo4j连接URI
-            neo4j_user: Neo4j用户名
-            neo4j_password: Neo4j密码
-            log_base_dir: 日志基础目录
+            log_base_dir: 日志基础目录（默认 backend/.log/API_generate_database/）
+            verbose: 是否在终端打印详细进度信息
         """
         # 配置
         self.config = LLMConfig()
         self.entity_config = LLMConfig()
         self.entity_config.timeout = 360  # 实体提取需要更长超时
+        self.verbose = verbose
         
-        # 图数据库
-        if neo4j_uri and neo4j_user and neo4j_password:
-            self.neo4j_client = Neo4jClient(neo4j_uri, neo4j_user, neo4j_password)
+        # 图数据库（使用默认配置，从环境变量读取）
+        try:
+            self.neo4j_client = Neo4jClient()  # 使用默认配置
             self.graph_writer = GraphWriter(self.neo4j_client)
-        else:
+            logger.info("Neo4j 客户端已配置")
+        except Exception as e:
             self.neo4j_client = None
             self.graph_writer = None
-            logger.warning("Neo4j未配置，将跳过图数据库写入")
+            logger.warning(f"Neo4j 未配置或配置错误，将跳过图数据库写入: {e}")
         
         # 日志目录
         if log_base_dir:
@@ -102,9 +99,6 @@ class ConcurrentExtractionService:
             # 默认在backend/.log/API_generate_database/
             backend_dir = Path(__file__).parent.parent.parent.parent
             self.log_base_dir = backend_dir / ".log" / "API_generate_database"
-        
-        # 对话解析器
-        self.adapter = DialogueAdapter()
         
         # 文本切分器
         self.text_splitter = ConcurrentExtractor()
@@ -115,6 +109,41 @@ class ConcurrentExtractionService:
         log_dir = self.log_base_dir / timestamp
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
+    
+    def _print_step(self, step: int, total: int, message: str, details: str = None):
+        """打印步骤进度信息（仅在 verbose 模式下）"""
+        if not self.verbose:
+            return
+        
+        icons = ["✂️", "🚀", "💾", "📊"]
+        icon = icons[step - 1] if step <= len(icons) else "▸"
+        print(f"\n{icon} 步骤 {step}/{total}: {message}")
+        if details:
+            print(f"   {details}")
+    
+    def _extract_user_speech(self, text: str, user_name: str) -> str:
+        """
+        从对话文本中提取用户的发言
+        
+        支持格式:
+        - [用户名]: 发言内容（整行）
+        - [用户名]:发言内容（无空格）
+        - 多行连续的用户发言
+        """
+        import re
+        user_lines = []
+        
+        # 搜索 [用户名]: 后面的所有内容，直到下一个 [xxx]: 标记或文本结束
+        # 使用非贪婪匹配，允许多行
+        pattern = rf'\[{re.escape(user_name)}\][:\uff1a]\s*(.*?)(?=\n\[[^\]]+\][:\uff1a]|\Z)'
+        
+        matches = re.findall(pattern, text, re.DOTALL)
+        for match in matches:
+            cleaned = match.strip()
+            if cleaned:
+                user_lines.append(cleaned)
+        
+        return '\n\n'.join(user_lines)
     
     def _create_extractors(self) -> Dict[str, Any]:
         """创建提取器实例（每个Worker独立使用）"""
@@ -190,23 +219,41 @@ class ConcurrentExtractionService:
     async def _process_all_chunks(
         self,
         chunks: List[str],
+        user_speech_chunks: List[str],
         document: StandardDocument,
         user_name: str,
         max_concurrency: int = 5,
         max_retries: int = 2
     ) -> Dict[str, List[Any]]:
-        """并发处理所有chunks"""
+        """
+        并发处理所有 chunks
+        
+        Args:
+            chunks: 完整对话切分的 chunks（用于实体/事件/情感/时间提取）
+            user_speech_chunks: 从每个 chunk 中提取的用户发言（用于风格分析，数量与 chunks 相同）
+            document: 文档对象
+            user_name: 用户名
+            max_concurrency: 最大并发数
+            max_retries: 最大重试次数
+        """
         queue = asyncio.Queue()
         extractor_names = list(self._create_extractors().keys())
         
-        # 填充任务队列
-        for chunk_id, chunk_text in enumerate(chunks):
+        # 填充任务队列 - 所有任务同等对待
+        # 风格分析用 user_speech_chunks[i], 其他用 chunks[i]
+        for chunk_id in range(len(chunks)):
             for extractor_name in extractor_names:
+                if extractor_name == "风格分析":
+                    # 风格分析使用用户发言 chunk
+                    chunk_text = user_speech_chunks[chunk_id]
+                else:
+                    # 其他提取器使用完整 chunk
+                    chunk_text = chunks[chunk_id]
                 await queue.put((chunk_id, chunk_text, extractor_name, 0))
         
         total_tasks = queue.qsize()
         logger.info(f"📋 任务队列: {total_tasks} 个任务 ({len(chunks)} chunks × {len(extractor_names)} 提取器)")
-        logger.info(f"🚀 启动 {max_concurrency} 个并发Worker")
+        logger.info(f"🚀 启动 {max_concurrency} 个并发 Worker")
         
         # 结果收集
         results_by_extractor = {name: [] for name in extractor_names}
@@ -246,11 +293,16 @@ class ConcurrentExtractionService:
                 
                 completed += 1
                 elapsed = asyncio.get_event_loop().time() - start_time
+                
+                # verbose 模式下打印进度
+                if self.verbose and completed % 5 == 0:
+                    print(f"   ⏳ 进度: {completed}/{total_tasks} ({completed/total_tasks*100:.1f}%)")
+                
                 logger.info(f"📊 进度: {completed}/{total_tasks} ({completed/total_tasks*100:.1f}%) | 耗时: {elapsed:.1f}s")
                 
                 queue.task_done()
         
-        # 启动Workers
+        # 启动 Workers
         workers = [asyncio.create_task(worker(i)) for i in range(max_concurrency)]
         await asyncio.gather(*workers)
         
@@ -298,20 +350,29 @@ class ConcurrentExtractionService:
         user_id: Optional[str] = None,
         max_concurrency: int = 5,
         write_to_db: bool = True,
+        verbose: bool = None,
     ) -> Dict[str, Any]:
         """
         提取知识并写入图数据库
         
+        输入文本格式（已整理好）:
+            [Interviewer]: 问题内容...
+            [用户名]: 回答内容...
+        
         Args:
-            dialogue_text: 对话文本
-            user_name: 用户名称
+            dialogue_text: 对话文本（已整理好的格式）
+            user_name: 用户名称（对应文本中的 [用户名] 标记）
             user_id: 用户ID（默认使用user_name）
             max_concurrency: 最大并发数
             write_to_db: 是否写入数据库
+            verbose: 是否打印详细进度（None表示使用初始化时的设置）
             
         Returns:
             包含提取结果和统计信息的字典
         """
+        # 允许在调用时覆盖 verbose 设置
+        if verbose is not None:
+            self.verbose = verbose
         start_time = datetime.now()
         user_id = user_id or user_name
         
@@ -319,43 +380,62 @@ class ConcurrentExtractionService:
         log_dir = self._create_log_directory()
         logger.info(f"📂 日志目录: {log_dir}")
         
-        # 1. 解析对话
-        logger.info("📖 步骤 1/5: 解析对话...")
-        documents = self.adapter.parse(dialogue_text)
-        if not documents:
-            raise ValueError("解析失败：没有生成任何文档")
+        # 预处理：替换文本中的 {User} 为实际用户名，避免 API 返回无意义的实体名
+        processed_text = dialogue_text.replace("{User}", user_name).replace("[User]", f"[{user_name}]")
+        logger.info(f"📝 文本预处理: 已将 {{User}}/[User] 替换为 {user_name}")
         
-        document = documents[0]
-        document.user_name = user_name
-        document.user_id = user_id
-        logger.info(f"   解析完成: {len(document.turns)} 轮对话")
-        
-        # 2. 切分文本
-        logger.info("✂️  步骤 2/5: 切分文本（滑动窗口）...")
-        chunks = self.text_splitter._split_text(document.raw_content)
-        logger.info(f"   切分成 {len(chunks)} 个chunks")
+        # 1. 切分文本（滑动窗口: 8000字符窗口, 4000字符步长）
+        self._print_step(1, 4, "切分文本（滑动窗口）...")
+        logger.info("✂️  步骤 1/4: 切分文本（滑动窗口）...")
+        chunks = self.text_splitter._split_text(processed_text)
+        self._print_step(1, 4, "切分文本（滑动窗口）...", f"切分成 {len(chunks)} 个 chunks")
+        logger.info(f"   切分成 {len(chunks)} 个 chunks")
         for i, chunk in enumerate(chunks):
             logger.info(f"     - Chunk#{i}: {len(chunk)} 字符")
         
-        # 3. 并发提取
-        logger.info("🚀 步骤 3/5: 开始并发提取...")
+        # 为风格提取准备：从每个 chunk 中提取用户发言（chunks 数量不变，只是内容精简）
+        user_speech_chunks = [self._extract_user_speech(chunk, user_name) for chunk in chunks]
+        total_user_speech_chars = sum(len(c) for c in user_speech_chunks)
+        logger.info(f"   用户发言提取: {len(user_speech_chunks)} 个 chunks, 共 {total_user_speech_chars} 字符")
+        for i, (full, user_only) in enumerate(zip(chunks, user_speech_chunks)):
+            logger.info(f"     - Chunk#{i}: {len(full)} → {len(user_only)} 字符 (用户发言)")
+        
+        # 创建临时文档对象
+        document = StandardDocument(
+            id=f"doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            user_id=user_id,
+            source_type="dialogue",
+            raw_content=processed_text,  # 使用替换后的文本
+            turns=[],
+            created_at=datetime.now()
+        )
+        
+        # 2. 并发提取
+        self._print_step(2, 4, "开始并发提取...", f"{len(chunks)} chunks × 5 提取器")
+        logger.info("🚀 步骤 2/4: 开始并发提取...")
         results = await self._process_all_chunks(
             chunks=chunks,
+            user_speech_chunks=user_speech_chunks,
             document=document,
             user_name=user_name,
             max_concurrency=max_concurrency
         )
         
-        # 4. 保存结果
-        logger.info("💾 步骤 4/5: 保存提取结果...")
+        # 3. 保存结果
+        self._print_step(3, 4, "保存提取结果...")
+        logger.info("💾 步骤 3/4: 保存提取结果...")
         results_file = self._save_results_to_json(results, log_dir)
+        self._print_step(3, 4, "保存提取结果...", f"已保存到 {log_dir}")
         
-        # 5. 写入图数据库
+        # 4. 写入图数据库
         if write_to_db and self.graph_writer:
-            logger.info("📊 步骤 5/5: 写入图数据库...")
+            self._print_step(4, 4, "写入图数据库...")
+            logger.info("📊 步骤 4/4: 写入图数据库...")
             await self._write_to_graph(user_id, user_name, results, document)
+            self._print_step(4, 4, "写入图数据库...", "写入完成 ✅")
         else:
-            logger.info("⏭️  步骤 5/5: 跳过图数据库写入")
+            self._print_step(4, 4, "跳过图数据库写入 ⏭️")
+            logger.info("⏭️  步骤 4/4: 跳过图数据库写入")
         
         # 统计信息
         end_time = datetime.now()

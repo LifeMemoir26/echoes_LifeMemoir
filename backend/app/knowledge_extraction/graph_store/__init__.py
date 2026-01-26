@@ -1,12 +1,13 @@
 """Graph Store - 图向量存储"""
 from .neo4j_client import Neo4jClient
-from .graph_writer import GraphWriter
+from .graph_writer import GraphWriter, BatchWriteResult
 from .schema import GRAPH_SCHEMA, init_schema
 from .query_engine import GraphQueryEngine, QueryResult, quick_timeline, quick_search
 
 __all__ = [
     "Neo4jClient",
     "GraphWriter",
+    "BatchWriteResult",
     "GRAPH_SCHEMA",
     "init_schema",
     "GraphQueryEngine",
@@ -14,3 +15,4 @@ __all__ = [
     "quick_timeline",
     "quick_search",
 ]
+

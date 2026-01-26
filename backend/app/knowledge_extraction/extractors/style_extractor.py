@@ -213,8 +213,57 @@ class StyleExtractor(BaseExtractor):
         **kwargs,
     ) -> list[StyleExtractionResult]:
         """解析 LLM 响应"""
+        # 中英文映射表 - 处理 API 返回中文的情况
+        TONE_MAPPING = {
+            # 中文 -> 英文
+            "温和亲切": "warm", "温和": "warm", "亲切": "warm",
+            "幽默风趣": "humorous", "幽默": "humorous",
+            "严肃认真": "serious", "严肃": "serious",
+            "感慨忧郁": "melancholic", "忧郁": "melancholic", "感慨": "melancholic",
+            "激动热情": "excited", "激动": "excited", "热情": "excited",
+            "平静从容": "calm", "平静": "calm", "从容": "calm",
+            "叙述性": "narrative", "叙述": "narrative",
+            "反思性": "reflective", "反思": "reflective",
+            # 英文 -> 英文 (保持原样)
+            "warm": "warm", "humorous": "humorous", "serious": "serious",
+            "melancholic": "melancholic", "excited": "excited", "calm": "calm",
+            "narrative": "narrative", "reflective": "reflective",
+        }
+        
+        NARRATIVE_MAPPING = {
+            # 中文
+            "按时间顺序": "chronological", "时间顺序": "chronological",
+            "联想跳跃式": "associative", "联想跳跃": "associative", "跳跃式": "associative",
+            "主题式": "thematic", "主题": "thematic",
+            "轶事式": "anecdotal", "轶事": "anecdotal",
+            # 英文
+            "chronological": "chronological", "associative": "associative",
+            "thematic": "thematic", "anecdotal": "anecdotal",
+        }
+        
+        def map_tone(value: str) -> ToneType:
+            """将中/英文语气值映射为 ToneType 枚举"""
+            mapped = TONE_MAPPING.get(value, "calm")
+            return ToneType(mapped)
+        
+        def map_narrative(value: str) -> NarrativeStyle:
+            """将中/英文叙事风格映射为 NarrativeStyle 枚举"""
+            mapped = NARRATIVE_MAPPING.get(value, "chronological")
+            return NarrativeStyle(mapped)
+        
         try:
             style_data = result.get("style", {})
+            
+            # 如果 style_data 为空但有 style_summary，仍然创建结果
+            if not style_data and result.get("style_summary"):
+                extraction_result = StyleExtractionResult(
+                    source_document_id=document.id,
+                    extractor_name=self.name,
+                    style=None,
+                    style_summary=result.get("style_summary", ""),
+                    confidence_score=0.5,
+                )
+                return [extraction_result]
             
             # 解析口头禅
             catch_phrases = []
@@ -228,20 +277,22 @@ class StyleExtractor(BaseExtractor):
                 except (ValueError, KeyError):
                     continue
             
-            # 解析次要语气
+            # 解析次要语气 - 使用映射
             secondary_tones = []
             for t in style_data.get("secondary_tones", []):
                 try:
-                    secondary_tones.append(ToneType(t))
-                except ValueError:
+                    secondary_tones.append(map_tone(t))
+                except (ValueError, KeyError):
                     continue
 
+            # 使用映射解析主要语气和叙事风格
+            primary_tone_raw = style_data.get("primary_tone", "calm")
+            narrative_style_raw = style_data.get("narrative_style", "chronological")
+            
             style = SpeakingStyle(
-                primary_tone=ToneType(style_data.get("primary_tone", "calm")),
+                primary_tone=map_tone(primary_tone_raw),
                 secondary_tones=secondary_tones,
-                narrative_style=NarrativeStyle(
-                    style_data.get("narrative_style", "chronological")
-                ),
+                narrative_style=map_narrative(narrative_style_raw),
                 sentence_patterns=style_data.get("sentence_patterns", []),
                 average_sentence_length=style_data.get("average_sentence_length"),
                 catch_phrases=catch_phrases,
@@ -264,5 +315,18 @@ class StyleExtractor(BaseExtractor):
             )
             
             return [extraction_result]
-        except Exception:
+        except Exception as e:
+            # 记录错误但尽量返回部分结果
+            import logging
+            logging.getLogger(__name__).warning(f"StyleExtractor parse error: {e}")
+            
+            # 尝试至少返回 style_summary
+            if result.get("style_summary"):
+                return [StyleExtractionResult(
+                    source_document_id=document.id,
+                    extractor_name=self.name,
+                    style=None,
+                    style_summary=result.get("style_summary", ""),
+                    confidence_score=0.3,
+                )]
             return []

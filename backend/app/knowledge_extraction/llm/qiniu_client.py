@@ -212,7 +212,7 @@ class AsyncQiniuAIClient:
         from datetime import datetime
         from pathlib import Path
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_dir = Path(__file__).parent.parent.parent.parent / ".test" / "log" / timestamp
+        self.log_dir = Path(__file__).parent.parent.parent.parent / ".log" / "API_generate_database" / timestamp
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._call_counter = 0
         self._counter_lock = asyncio.Lock()
@@ -348,29 +348,22 @@ class AsyncQiniuAIClient:
             from datetime import datetime
             timestamp = datetime.now().strftime("%H%M%S")
             
-            # 改进：优先从system prompt内容精确判断提取器类型
+            # 从 system prompt 内容判断提取器类型
             extractor_name = "unknown"
             for msg in messages:
                 if msg.get("role") == "system":
                     content = msg.get("content", "")
-                    # 更精确的判断逻辑 - 按特征词的优先级
-                    if "知识图谱数据架构师" in content and "命名实体" in content:
+                    # 按照各提取器的 SYSTEM_PROMPT 特征词精确判断
+                    if "个人回忆录知识图谱" in content and "命名实体" in content:
                         extractor_name = "entity"
-                    elif "情感侧写专家" in content or ("情感状态" in content and "EmotionSegment" in content):
-                        extractor_name = "emotion"
-                    elif "传记作家" in content and "人生事件" in content and "Event" in content:
+                    elif "资深传记作家" in content and "人生事件" in content:
                         extractor_name = "event"
-                    elif "风格分析师" in content or "语言特点" in content or "SpeakingStyle" in content:
+                    elif "情感侧写专家" in content:
+                        extractor_name = "emotion"
+                    elif "语言风格分析专家" in content:
                         extractor_name = "style"
-                    elif "时间推理" in content or "TemporalAnchor" in content:
+                    elif "时间推理专家" in content:
                         extractor_name = "temporal"
-                    # 如果上面都没匹配，使用更宽泛的判断
-                    elif "实体" in content and extractor_name == "unknown":
-                        extractor_name = "entity"
-                    elif "情感" in content and extractor_name == "unknown":
-                        extractor_name = "emotion"
-                    elif "事件" in content and extractor_name == "unknown":
-                        extractor_name = "event"
                     break
             
             filename = f"{timestamp}_{call_id:04d}_{extractor_name}.json"
