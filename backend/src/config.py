@@ -62,24 +62,6 @@ class LLMConfig(BaseSettings):
     )
 
 
-class Neo4jConfig(BaseSettings):
-    """Neo4j 配置"""
-    uri: str = Field(default="bolt://localhost:7687", description="Neo4j 连接 URI")
-    user: str = Field(default="neo4j", description="用户名")
-    password: str = Field(default="password", description="密码")
-    database: str = Field(default="neo4j", description="数据库名称")
-    
-    # 向量索引配置
-    vector_dimension: int = Field(default=1792, description="向量维度（acge_text_embedding=1792）")
-    similarity_function: Literal["cosine", "euclidean"] = Field(
-        default="cosine", 
-        description="向量相似度函数"
-    )
-    
-    class Config:
-        env_prefix = "NEO4J_"
-
-
 class EmbeddingConfig(BaseSettings):
     """嵌入模型配置"""
     # 使用本源量子 acge_text_embedding（实体识别优化，中文MTEB霸榜）
@@ -117,7 +99,6 @@ class ExtractionConfig(BaseSettings):
 class KnowledgeExtractionSettings(BaseSettings):
     """知识提取模块总配置"""
     llm: LLMConfig = Field(default_factory=LLMConfig)
-    neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     
