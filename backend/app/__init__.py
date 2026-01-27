@@ -1,1 +1,0 @@
-"""Echoes LifeMemoir Backend Application"""

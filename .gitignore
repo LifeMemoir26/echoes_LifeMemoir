@@ -19,6 +19,7 @@ Thumbs.db
 tmp/
 
 # --- Project Specific ---
+data/
 .data/
 .reference/
 .test/
