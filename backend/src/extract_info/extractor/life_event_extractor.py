@@ -6,8 +6,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from ...llm.base_client import BaseLLMClient
-from ...utils.json_parser import parse_json_robust
+from ...llm.concurrency_manager import ConcurrencyManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +29,29 @@ class LifeEventExtractor:
     - 亲人变动（出生、去世、重要关系变化）
     """
     
-    PROMPT_TEMPLATE = """你是一位专业的人生传记分析师。请从以下文本中提取{叙述者}的重要人生事件。
+    SYSTEM_PROMPT = """你是一位专业的人生传记分析师。你的任务是从文本中提取叙述者的重要人生事件。
 
-重要事件包括：
+**输出格式（JSON数组）**：
+[
+  {
+    "year": "1985",
+    "time_detail": "春季",
+    "event_summary": "叙述者从北京大学中文系毕业"
+  },
+  {
+    "year": "9999",
+    "time_detail": "1990年到1995年",
+    "event_summary": "叙述者在上海人民出版社工作出任编辑"
+  }
+]
+
+如果没有找到重要事件，返回空数组 []
+
+**重要：只返回JSON数组，不要添加任何解释、分析或其他文字。**"""
+    
+    USER_PROMPT_TEMPLATE = """请从以下文本中提取{narrator_name}的重要人生事件。
+
+**重要事件包括**：
 1. 结婚、离婚、重要恋爱关系
 2. 工作变动：入职、离职、升职、调动、退休
 3. 教育经历：入学、毕业、深造
@@ -44,7 +63,7 @@ class LifeEventExtractor:
 9. 重大财务事件：创业、破产、重大投资
 10. 人生转折点：信仰改变、价值观转变
 
-提取要求：
+**提取要求**：
 1. 时间格式：
    - 第一段（year）：精准的年份（如"1985"、"2010"）
      * 如果时间模糊或不确定，填"9999"
@@ -55,54 +74,34 @@ class LifeEventExtractor:
 
 2. 事件说明（event_summary）：
    - 简练准确，10-30字
-   - **必须包含明确主语**：例如"{叙述者}从北京大学毕业"、"{叙述者}与妻子结婚"
+   - **必须包含明确主语**：例如"{narrator_name}从北京大学毕业"、"{narrator_name}与妻子结婚"
    - 突出事件核心要素
    - 客观描述，不加主观评价
-   - **只提取{叙述者}本人的人生事件**，不要提取他人的事件
+   - **只提取{narrator_name}本人的人生事件**，不要提取他人的事件
 
 3. 只提取确实发生的重要事件，不要提取：
    - 日常琐事
    - 情绪描述
    - 观点看法
    - 假设性事件
-   - 他人的事件（除非是{叙述者}的亲人重大变动）
+   - 他人的事件（除非是{narrator_name}的亲人重大变动）
 
-文本内容：
-{text}
-
-请以JSON格式返回，格式如下：
-```json
-[
-  {{
-    "year": "1985",
-    "time_detail": "春季",
-    "event_summary": "{叙述者}从北京大学中文系毕业"
-  }},
-  {{
-    "year": "9999",
-    "time_detail": "1990年到1995年",
-    "event_summary": "{叙述者}在上海人民出版社工作出任编辑"
-  }}
-]
-```
-
-如果没有找到重要事件，返回空数组 []
-
-**重要：只返回JSON数组，不要添加任何解释、分析或其他文字。**"""
+**文本内容**：
+{text}"""
     
     def __init__(
         self, 
-        llm_client: BaseLLMClient,
+        concurrency_manager: ConcurrencyManager,
         model: Optional[str] = None
     ):
         """
         初始化事件提取器
         
         Args:
-            llm_client: LLM客户端
+            concurrency_manager: 全局并发管理器（支持系统提示词分离）
             model: 模型名称（可选，使用客户端默认模型）
         """
-        self.llm_client = llm_client
+        self.concurrency_manager = concurrency_manager
         self.model = model
     
     async def extract(
@@ -122,67 +121,43 @@ class LifeEventExtractor:
             - year: 年份（精准年份或"9999"）
             - time_detail: 时间补充信息
             - event_summary: 事件简要说明
-            - chunk_source: 来源文本块（用于追溯）
             - extracted_at: 提取时间戳
         """
         try:
-            # 构造提示词
-            prompt = self.PROMPT_TEMPLATE.replace("{叙述者}", narrator_name)
-            prompt = prompt.replace("{text}", text)  # 使用完整文本
+            # 构造用户提示词
+            user_prompt = self.USER_PROMPT_TEMPLATE.format(
+                narrator_name=narrator_name,
+                text=text
+            )
             
-            # 调用LLM
-            response = await self.llm_client.generate(
-                prompt=prompt,
+            # 调用LLM（系统提示词分离，保证返回完美JSON）
+            events = await self.concurrency_manager.generate_structured(
+                prompt=user_prompt,
+                system_prompt=self.SYSTEM_PROMPT,
                 model=self.model,
                 temperature=0.1  # 低温度保证稳定性
             )
             
-            # 解析JSON响应
-            events = self._parse_response(response)
-            
-            # 添加元数据（不添加chunk_source以减少存储开销）
-            timestamp = datetime.now().isoformat()
-            for event in events:
-                event['extracted_at'] = timestamp
-            
-            logger.info(f"从文本块中提取到 {len(events)} 个人生事件")
-            return events
-            
-        except Exception as e:
-            logger.error(f"事件提取失败: {e}", exc_info=True)
-            return []
-    
-    def _parse_response(self, response: str) -> List[Dict[str, Any]]:
-        """
-        解析LLM响应
-        
-        支持的格式：
-        1. 纯JSON数组
-        2. Markdown代码块包裹的JSON
-        3. 各种常见包装格式
-        """
-        try:
-            # 使用鲁棒的JSON解析
-            result = parse_json_robust(response, return_error_dict=False)
-            
             # 验证格式
-            if not isinstance(result, list):
-                logger.warning(f"响应不是数组格式: {type(result)}")
+            if not isinstance(events, list):
+                logger.warning(f"响应不是数组格式: {type(events)}")
                 return []
             
-            # 验证每个事件的格式
+            # 验证每个事件并添加元数据
+            timestamp = datetime.now().isoformat()
             valid_events = []
-            for event in result:
+            for event in events:
                 if self._validate_event(event):
+                    event['extracted_at'] = timestamp
                     valid_events.append(event)
                 else:
                     logger.warning(f"事件格式无效，跳过: {event}")
             
+            logger.info(f"从文本块中提取到 {len(valid_events)} 个人生事件")
             return valid_events
             
         except Exception as e:
-            logger.error(f"解析响应失败: {e}")
-            logger.debug(f"原始响应前500字符: {response[:500]}")
+            logger.error(f"事件提取失败: {e}", exc_info=True)
             return []
     
     def _validate_event(self, event: Dict[str, Any]) -> bool:
