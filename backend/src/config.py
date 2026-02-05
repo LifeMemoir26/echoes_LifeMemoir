@@ -3,7 +3,7 @@ Knowledge Extraction Configuration
 知识提取模块配置
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, field_validator, AliasChoices
+from pydantic import Field, field_validator, computed_field, AliasChoices
 from functools import lru_cache
 from typing import Literal
 
@@ -11,14 +11,10 @@ from typing import Literal
 class LLMConfig(BaseSettings):
     """LLM 配置 - 使用七牛云 AI API"""
     # 七牛云 API 配置
-    api_key: str = Field(
-        default="sk-your-api-key-here",
-        description="七牛云 API Key (单个密钥，兼容旧配置)"
-    )
     api_keys_str: str = Field(
-        default="sk-your-api-key-here",
-        description="七牛云 API Keys 字符串 (逗号分隔，支持多个密钥实现并发)",
-        validation_alias=AliasChoices("api_keys_str", "api_keys", "LLM_API_KEYS")  # 尝试多个变量名
+        ...,  # 必需字段
+        description="七牛云 API Keys (逗号分隔，支持多个密钥实现并发)",
+        validation_alias=AliasChoices("api_keys_str", "api_keys", "LLM_API_KEYS")
     )
     base_url: str = Field(
         default="https://api.qnaigc.com/v1",
@@ -49,16 +45,32 @@ class LLMConfig(BaseSettings):
     max_tokens: int = Field(default=16384, description="最大生成 token 数（增加到16k以支持长文本）")
     timeout: int = Field(default=180, description="API请求超时时间（秒）")
     
+    # 并发控制配置（仅从配置文件读取，不可在代码中覆盖）
+    concurrency_multiplier: float = Field(
+        default=1.5, 
+        description="并发倍率（推荐1.0-2.0）"
+    )
+    
+    @computed_field  # type: ignore[misc]
     @property
     def api_keys(self) -> list[str]:
-        """获取解析后的API密钥列表"""
-        return [key.strip() for key in self.api_keys_str.split(',') if key.strip()]
+        """获取解析后的API密钥列表（自动缓存）"""
+        keys = [key.strip() for key in self.api_keys_str.split(',') if key.strip()]
+        if not keys:
+            raise ValueError("至少需要配置一个API密钥")
+        return keys
+    
+    @computed_field  # type: ignore[misc]
+    @property
+    def concurrency_level(self) -> int:
+        """自动计算的并发级别（API密钥数 × 倍率）"""
+        return max(1, int(len(self.api_keys) * self.concurrency_multiplier))
     
     model_config = SettingsConfigDict(
         env_prefix="LLM_",
-        env_file=["backend/.env", ".env"],  # 支持多个路径
+        env_file=["backend/.env", ".env"],
         env_file_encoding="utf-8",
-        extra="ignore"  # 忽略额外的环境变量
+        extra="ignore"
     )
 
 
@@ -67,9 +79,9 @@ class EmbeddingConfig(BaseSettings):
     # 使用本源量子 acge_text_embedding（实体识别优化，中文MTEB霸榜）
     model_name: str = Field(
         default="aspire/acge_text_embedding",
-        description="嵌入模型名称（推荐：aspire/acge_text_embedding 实体匹配最强）"
+        description="嵌入模型名称"
     )
-    dimension: int = Field(default=1792, description="嵌入维度（acge=1792）")
+    dimension: int = Field(default=1792, description="嵌入维度")
     batch_size: int = Field(default=32, description="批处理大小")
     
     class Config:

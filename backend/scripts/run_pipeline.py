@@ -80,11 +80,21 @@ async def main():
     print(f"\n🔧 初始化知识提取Pipeline...")
     stage1_start = time.time()
     
+    # 加载配置
+    config = get_settings()
+    num_keys = len(config.llm.api_keys)
+    
+    # 并发级别：根据密钥数量智能设置（每个密钥轮流使用）
+    recommended_concurrency = int(num_keys * 1.5)
+    
+    print(f"  检测到 {num_keys} 个API密钥")
+    print(f"  推荐并发级别: {recommended_concurrency} (全局轮询模式)")
+    
     # 创建知识提取Pipeline
     extraction_pipeline = ExtractionPipeline(
         username=username,
         data_base_dir=data_root,
-        concurrency_level=8,  # 降低并发避免429错误
+        concurrency_level=recommended_concurrency,
         verbose=True
     )
     
@@ -97,7 +107,8 @@ async def main():
     
     print(f"  ✅ Pipeline初始化完成")
     print(f"  切分模式: 8000字窗口 / 4000字步长")
-    print(f"  并发级别: 15")
+    print(f"  并发架构: 全局密钥池轮询")
+    print(f"  并发级别: {recommended_concurrency}")
     
     # 执行知识提取
     print(f"\n🚀 执行知识提取流程...")
@@ -141,9 +152,7 @@ async def main():
     print(f"\n🔧 初始化向量构建Pipeline...")
     stage2_start = time.time()
     
-    # 加载配置
-    config = get_settings()
-    print(f"  ✅ 加载配置: {len(config.llm.api_keys)} 个API密钥")
+    print(f"  ✅ 复用配置: {num_keys} 个API密钥")
     
     # 创建LLM客户端
     llm_client = AsyncQiniuAIClient(config=config.llm)
@@ -155,13 +164,13 @@ async def main():
         llm_client=llm_client,
         data_root=str(data_root),
         model="deepseek-r1",
-        batch_size=15
+        batch_size=recommended_concurrency
     )
     
     print(f"  ✅ Pipeline初始化完成")
     print(f"  切分模式: 1000字窗口 / 900字滑动")
     print(f"  向量模型: aspire/acge_text_embedding (1792维)")
-    print(f"  并发配置: batch_size=15")
+    print(f"  并发级别: {recommended_concurrency}")
     
     # 执行向量构建
     print(f"\n🚀 执行向量构建流程...")
