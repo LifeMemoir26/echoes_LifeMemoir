@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.pipelines.extraction_pipeline import ExtractionPipeline
 from src.pipelines.vector_pipeline import VectorPipeline
-from src.llm.qiniu_client import AsyncQiniuAIClient
+from src.llm.concurrency_manager import get_concurrency_manager
 from src.config import get_settings
 
 
@@ -85,16 +85,19 @@ async def main():
     num_keys = len(config.llm.api_keys)
     
     # 并发级别：根据密钥数量智能设置（每个密钥轮流使用）
-    recommended_concurrency = int(num_keys * 1.5)
+    recommended_concurrency = int(num_keys * config.llm.concurrency_multiplier)
     
     print(f"  检测到 {num_keys} 个API密钥")
     print(f"  推荐并发级别: {recommended_concurrency} (全局轮询模式)")
     
+    # 获取全局并发管理器单例
+    concurrency_manager = get_concurrency_manager()
+    
     # 创建知识提取Pipeline
     extraction_pipeline = ExtractionPipeline(
         username=username,
+        concurrency_manager=concurrency_manager,
         data_base_dir=data_root,
-        concurrency_level=recommended_concurrency,
         verbose=True
     )
     
@@ -154,14 +157,15 @@ async def main():
     
     print(f"  ✅ 复用配置: {num_keys} 个API密钥")
     
-    # 创建LLM客户端
-    llm_client = AsyncQiniuAIClient(config=config.llm)
-    print(f"  ✅ 创建LLM客户端")
+    # 获取全局ConcurrencyManager
+    concurrency_manager = get_concurrency_manager()
+    print(f"  ✅ 获取全局ConcurrencyManager")
     
     # 创建向量Pipeline
+    # 注意：新架构使用 concurrency_manager.generate_structured() 自动处理系统提示词分离
     vector_pipeline = VectorPipeline(
         username=username,
-        llm_client=llm_client,
+        concurrency_manager=concurrency_manager,
         data_root=str(data_root),
         model="deepseek-r1",
         batch_size=recommended_concurrency

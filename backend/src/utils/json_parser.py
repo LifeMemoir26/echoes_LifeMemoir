@@ -8,12 +8,12 @@
 """
 import json
 import logging
-from typing import Optional
+from typing import Optional, Union
 
 logger = logging.getLogger(__name__)
 
 
-def parse_json_basic(content: str) -> Optional[dict]:
+def parse_json_basic(content: str) -> Optional[Union[dict, list]]:
     """
     基础JSON解析（去markdown、解包），不调用LLM
     
@@ -21,7 +21,7 @@ def parse_json_basic(content: str) -> Optional[dict]:
         content: 待解析的字符串
         
     Returns:
-        解析成功返回字典，失败返回None
+        解析成功返回字典或列表，失败返回None
     """
     try:
         content = content.strip()

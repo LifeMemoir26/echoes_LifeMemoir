@@ -13,7 +13,7 @@ from ..utils.alias_manager import AliasManager
 from ..extract_info.extractor.event_summary_extractor import EventSummaryExtractor
 from ..database.chunk_store import ChunkStore
 from ..database.vector_store import VectorStore
-from ..llm.base_client import BaseLLMClient
+from ..llm.concurrency_manager import ConcurrencyManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class VectorPipeline:
     def __init__(
         self,
         username: str,
-        llm_client: BaseLLMClient,
+        concurrency_manager: ConcurrencyManager,
         data_root: str = "./.data",
         model: str = "claude-3.7-sonnet",
         batch_size: int = 5
@@ -44,13 +44,13 @@ class VectorPipeline:
         
         Args:
             username: 用户名
-            llm_client: LLM客户端
+            concurrency_manager: 全局并发管理器（支持系统提示词分离）
             data_root: 数据根目录
             model: LLM模型名称
             batch_size: 批处理大小（并发数）
         """
         self.username = username
-        self.llm_client = llm_client
+        self.concurrency_manager = concurrency_manager
         self.model = model
         self.batch_size = batch_size
         
@@ -65,9 +65,9 @@ class VectorPipeline:
         alias_db_path = data_path / "database.db"
         self.alias_manager = AliasManager(str(alias_db_path))
         
-        # 摘要提取器
+        # 摘要提取器（使用ConcurrencyManager支持系统提示词分离）
         self.summary_extractor = EventSummaryExtractor(
-            llm_client=llm_client,
+            concurrency_manager=concurrency_manager,
             model=model
         )
         
@@ -292,16 +292,15 @@ async def test_vector_pipeline():
     """测试向量Pipeline"""
     import asyncio
     from ..config import get_settings
-    from ..llm.qiniu_client import AsyncQiniuAIClient
+    from ..llm.concurrency_manager import get_concurrency_manager
     
-    # 初始化配置
-    config = get_settings()
-    llm_client = AsyncQiniuAIClient(config=config.llm)
+    # 获取全局ConcurrencyManager
+    concurrency_manager = get_concurrency_manager()
     
     # 创建Pipeline
     pipeline = VectorPipeline(
         username="test_user",
-        llm_client=llm_client,
+        concurrency_manager=concurrency_manager,
         model="claude-3.7-sonnet",
         batch_size=3
     )

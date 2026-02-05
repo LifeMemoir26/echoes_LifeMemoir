@@ -5,8 +5,7 @@ Uncertain Event Refiner for Year 9999 Events
 import json
 import logging
 from typing import List, Dict, Any
-from ...llm.base_client import BaseLLMClient
-from ...utils.json_parser import parse_json_robust_async
+from ...llm.concurrency_manager import ConcurrencyManager
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +55,13 @@ INFER_PROMPT = """你是一位专业的人生传记整理专家。
    - 按year排序输出（9999放在最后）
    - **重要**：不要返回chunk_source、extracted_at、written_at、created_at等长文本或时间戳字段
 
+**引号使用规则**：事件描述中引用词汇或概念时，只使用中文单引号（'词汇'），严禁使用中文双引号（"词汇"）或英文引号（"word"），以避免与JSON语法冲突。
+
+**严格禁止**：
+- 不要用```json或```包裹输出
+- 不要添加任何解释文字
+- 直接输出纯JSON对象，**输出需要以 ] 结束，需要以 [ 开始**。
+
 请直接输出JSON数组，不要任何其他文字：
 """
 
@@ -63,14 +69,14 @@ INFER_PROMPT = """你是一位专业的人生传记整理专家。
 class UncertainEventRefiner:
     """不确定年份事件优化器"""
     
-    def __init__(self, llm_client: BaseLLMClient):
+    def __init__(self, concurrency_manager: ConcurrencyManager):
         """
         初始化
         
         Args:
-            llm_client: LLM客户端
+            concurrency_manager: 全局并发管理器
         """
-        self.llm_client = llm_client
+        self.concurrency_manager = concurrency_manager
         
     async def refine_uncertain_events(
         self, 
@@ -110,22 +116,32 @@ class UncertainEventRefiner:
         uncertain_json = json.dumps(cleaned_uncertain, ensure_ascii=False, indent=2)
         context_json = json.dumps(cleaned_context, ensure_ascii=False, indent=2)
         
-        prompt = INFER_PROMPT.format(
+        user_prompt = INFER_PROMPT.format(
             context_events_json=context_json,
             uncertain_events_json=uncertain_json
         )
+        system_prompt = """你是一位专业的人生传记整理专家。请根据上下文推测年份或完善时间补充，返回JSON数组。"""
         
-        # 调用LLM
+        # 调用LLM（系统提示词分离，保证返回JSON）
         try:
-            response = await self.llm_client.generate(
-                prompt=prompt,
-                model="claude-3.7-sonnet",
+            refined_events = await self.concurrency_manager.generate_structured(
+                prompt=user_prompt,
+                system_prompt=system_prompt,
+                model="deepseek-r1",
                 temperature=0.2,  # 稍高温度以支持推理
                 max_tokens=16384
             )
             
-            # 解析结果
-            refined_events = await self._parse_response_async(response)
+            # 验证格式
+            if not isinstance(refined_events, list):
+                raise ValueError("响应必须是JSON数组")
+            
+            # 验证必需字段
+            for event in refined_events:
+                if not isinstance(event, dict):
+                    raise ValueError("每个事件必须是字典对象")
+                if "year" not in event or "event_summary" not in event:
+                    raise ValueError("事件缺少必需字段: year, event_summary")
             
             # 统计年份推测情况
             inferred_count = sum(1 for e in refined_events if e.get("year") != "9999")
@@ -136,31 +152,4 @@ class UncertainEventRefiner:
         except Exception as e:
             logger.error(f"不确定年份事件优化失败: {e}")
             raise
-            
-    async def _parse_response_async(self, response: str) -> List[Dict[str, Any]]:
-        """解析LLM响应（异步）"""
-        try:
-            # 使用鲁棒的JSON解析（带LLM修复）
-            events = await parse_json_robust_async(
-                response, 
-                llm_fix=True, 
-                llm_client=self.llm_client,
-                return_error_dict=False
-            )
-            
-            if not isinstance(events, list):
-                raise ValueError("响应必须是JSON数组")
-                
-            # 验证必需字段
-            for event in events:
-                if not isinstance(event, dict):
-                    raise ValueError("每个事件必须是字典对象")
-                if "year" not in event or "event_summary" not in event:
-                    raise ValueError("事件缺少必需字段: year, event_summary")
-                    
-            return events
-            
-        except Exception as e:
-            logger.error(f"响应解析失败: {e}")
-            logger.debug(f"原始响应前500字符: {response[:500]}")
-            raise ValueError(f"LLM返回的不是有效JSON: {e}")
+

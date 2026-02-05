@@ -15,7 +15,7 @@
 import asyncio
 import time
 import logging
-from typing import Optional, List, Callable, Any, TypeVar, Coroutine
+from typing import Optional, List, Callable, Any, TypeVar, Coroutine, Union
 from dataclasses import dataclass
 from copy import deepcopy
 
@@ -319,11 +319,11 @@ class ConcurrencyManager:
         temperature: Optional[float] = None,
         max_fix_attempts: int = 3,
         **kwargs
-    ) -> dict:
+    ) -> Union[dict, list]:
         """
         生成结构化JSON输出（自动并发控制、错误重试、JSON解析和修复）
         
-        保证返回完美的JSON字典：
+        保证返回完美的JSON字典或数组：
         1. 调用AsyncQiniuAIClient获取原始响应
         2. 验证是否规范并进行初级修复（去markdown、解包）
         3. 如果还不对，用LLM修复（最多3次，享受并发轮换）

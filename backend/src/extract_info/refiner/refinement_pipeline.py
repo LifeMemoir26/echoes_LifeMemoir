@@ -8,7 +8,7 @@ from ...database.sqlite_client import SQLiteClient
 from .event_refiner import EventRefiner
 from .uncertain_event_refiner import UncertainEventRefiner
 from .character_profile_refiner import CharacterProfileRefiner
-from ...llm.base_client import BaseLLMClient
+from ...llm.concurrency_manager import ConcurrencyManager
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +16,18 @@ logger = logging.getLogger(__name__)
 class RefinementPipeline:
     """数据库结果优化流程"""
     
-    def __init__(self, db_client: SQLiteClient, llm_client: BaseLLMClient):
+    def __init__(self, db_client: SQLiteClient, concurrency_manager: ConcurrencyManager):
         """
         初始化
         
         Args:
             db_client: 数据库客户端
-            llm_client: LLM客户端
+            concurrency_manager: 全局并发管理器
         """
         self.db_client = db_client
-        self.event_refiner = EventRefiner(llm_client)
-        self.uncertain_refiner = UncertainEventRefiner(llm_client)
-        self.profile_refiner = CharacterProfileRefiner(llm_client)
+        self.event_refiner = EventRefiner(concurrency_manager)
+        self.uncertain_refiner = UncertainEventRefiner(concurrency_manager)
+        self.profile_refiner = CharacterProfileRefiner(concurrency_manager)
         
     async def refine_all(self) -> Dict[str, Any]:
         """
@@ -51,32 +51,58 @@ class RefinementPipeline:
             "profile_refined": False
         }
         
-        # 步骤1：优化精准年份事件
-        logger.info("\n步骤1：优化精准年份事件")
-        logger.info("-" * 60)
-        refined_precise_events = await self._refine_precise_events(stats)
+        # 三个打包任务并发执行
+        async def refine_events_task():
+            """打包1：事件优化流程（顺序执行）"""
+            # 步骤1：优化精准年份事件
+            logger.info("\n[1] 步骤1：优化精准年份事件")
+            logger.info("-" * 60)
+            refined_precise_events = await self._refine_precise_events(stats)
+            
+            # 步骤2：优化不确定年份事件
+            logger.info("\n[1] 步骤2：优化不确定年份事件（基于步骤1的上下文）")
+            logger.info("-" * 60)
+            refined_uncertain_events = await self._refine_uncertain_events(
+                refined_precise_events, stats
+            )
+            
+            # 步骤3：覆写所有事件到数据库
+            logger.info("\n[1] 步骤3：写回优化后的事件到数据库")
+            logger.info("-" * 60)
+            await self._write_events(refined_precise_events, refined_uncertain_events, stats)
         
-        # 步骤2：优化不确定年份事件
-        logger.info("\n步骤2：优化不确定年份事件（基于步骤1的上下文）")
-        logger.info("-" * 60)
-        refined_uncertain_events = await self._refine_uncertain_events(
-            refined_precise_events, stats
-        )
+        async def refine_profile_task():
+            """打包2：优化人物档案"""
+            logger.info("\n[2] 优化人物档案")
+            logger.info("-" * 60)
+            await self._refine_profile(stats)
         
-        # 步骤3：写回所有事件到数据库
-        logger.info("\n步骤3：写回优化后的事件到数据库")
-        logger.info("-" * 60)
-        await self._write_events(refined_precise_events, refined_uncertain_events, stats)
+        async def refine_aliases_task():
+            """打包3：优化别名关联"""
+            logger.info("\n[3] 优化别名关联")
+            logger.info("-" * 60)
+            await self._refine_aliases(stats)
         
-        # 步骤4：优化人物档案
-        logger.info("\n步骤4：优化人物档案")
-        logger.info("-" * 60)
-        await self._refine_profile(stats)
-        
-        # 步骤5：优化别名关联
-        logger.info("\n步骤5：优化别名关联")
-        logger.info("-" * 60)
-        await self._refine_aliases(stats)
+        # 并发执行三个打包任务
+        import asyncio
+        try:
+            results = await asyncio.gather(
+                refine_events_task(),
+                refine_profile_task(),
+                refine_aliases_task(),
+                return_exceptions=True
+            )
+            
+            # 检查是否有异常
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    task_names = ["事件优化", "人物档案优化", "别名优化"]
+                    logger.error(f"{task_names[i]}任务失败: {result}")
+                    raise result
+                    
+        except Exception as e:
+            logger.error(f"优化流程异常: {e}")
+            raise
         
         # 输出统计
         logger.info("\n" + "=" * 60)

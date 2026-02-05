@@ -25,8 +25,8 @@ class CharacterProfileExtractor:
 
 **输出格式（JSON）**：
 {{
-  "personality": ["性格特征1", "性格特征2", "性格特征3"],
-  "worldview": ["价值观1", "价值观2", "价值观3"],
+  "personality": "性格特征的描述性段落文字（150-250字）",
+  "worldview": "世界观和价值观的描述性段落文字（150-250字）",
   "aliases": [
     {{
       "type": "人名",
@@ -41,25 +41,34 @@ class CharacterProfileExtractor:
   ]
 }}
 
-如果某个维度没有足够信息，可以返回空数组。
+**重要规则**：
+1. personality和worldview必须是字符串格式，严禁返回数组
+2. 用流畅的段落文字描述，而非列表或条目
+3. 如果某个维度没有足够信息，返回空字符串
+4. **引号使用规则**：文本内容中引用词汇或概念时，只使用中文单引号（'词汇'），严禁使用中文双引号（"词汇"）或英文引号（"word"），以避免与JSON语法冲突
 
-**重要：只返回JSON对象，不要添加任何解释、分析说明或其他文字。**"""
+**严格禁止**：
+- 不要用```json或```包裹输出
+- 不要添加任何解释文字
+- 直接输出纯JSON对象，**输出需要以 } 结束，需要以 { 开始**。"""
     
     USER_PROMPT_TEMPLATE = """请从以下文本中分析{narrator_name}的特征。
 
 **分析要求**：
 
 1. 性格特点（personality）：
-   - 提取3-5个关键性格特征
-   - 每个特征用简短词语描述（2-4字）
+   - 用一段描述性文字总结性格特征（150-250字）
    - 基于具体行为和表述推断
-   - 例如：["乐观开朗", "坚韧不拔", "注重家庭"]
+   - 呈现性格的多面性和复杂性
+   - 用流畅的段落文字表达，严禁返回列表或数组
+   - 例如："表现出乐观开朗的性格特质，面对困难时展现出坚韧不拔的意志。在家庭关系中体现出注重亲情、珍惜陪伴的特点。"
 
 2. 世界观与价值观（worldview）：
-   - 提取对重要事物的看法和态度
-   - 每条观点简练准确（10-30字）
+   - 用一段描述性文字总结对重要事物的看法和态度（150-250字）
    - 关注对工作、家庭、人际、社会等的看法
-   - 例如：["认为家庭和睦比事业成功更重要", "相信努力就能改变命运"]
+   - 揭示其价值判断和信念体系
+   - 用流畅的段落文字表达，严禁返回列表或数组
+   - 例如："认为家庭和睦比事业成功更重要，相信努力就能改变命运。对待工作持务实态度，强调实际成果胜过形式主义。"
 
 3. 别名关联（aliases）：
    - 提取文本中出现的人名、地名、物品的别名和正式名称的关联
@@ -123,15 +132,16 @@ class CharacterProfileExtractor:
                 temperature=0.3  # 适中温度，兼顾稳定性和创造性
             )
             
-            # 添加元数据
-            profile['extracted_at'] = datetime.now().isoformat()
-            profile['narrator_name'] = narrator_name
+            # 日志输出（personality和worldview现在是字符串）
+            personality_len = len(profile.get('personality', '')) if profile.get('personality') else 0
+            worldview_len = len(profile.get('worldview', '')) if profile.get('worldview') else 0
+            aliases_count = len(profile.get('aliases', []))
             
             logger.info(
                 f"提取人物特征: "
-                f"性格{len(profile.get('personality', []))}项, "
-                f"世界观{len(profile.get('worldview', []))}项, "
-                f"别名{len(profile.get('aliases', []))}项"
+                f"性格{personality_len}字, "
+                f"世界观{worldview_len}字, "
+                f"别名{aliases_count}项"
             )
             return profile
             
@@ -151,21 +161,15 @@ class CharacterProfileExtractor:
             'aliases': []
         }
         
-        # 处理性格特点（字符串）
+        # 处理性格特点（严格要求字符串）
         if 'personality' in profile:
             if isinstance(profile['personality'], str):
                 normalized['personality'] = profile['personality'].strip()
-            elif isinstance(profile['personality'], list):
-                # 兼容旧格式，合并为字符串
-                normalized['personality'] = '；'.join(str(item) for item in profile['personality'] if item)
         
-        # 处理世界观（字符串）
+        # 处理世界观（严格要求字符串）
         if 'worldview' in profile:
             if isinstance(profile['worldview'], str):
                 normalized['worldview'] = profile['worldview'].strip()
-            elif isinstance(profile['worldview'], list):
-                # 兼容旧格式，合并为字符串
-                normalized['worldview'] = '；'.join(str(item) for item in profile['worldview'] if item)
         
         # 处理别名关联
         if 'aliases' in profile and isinstance(profile['aliases'], list):

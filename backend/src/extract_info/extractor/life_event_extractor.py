@@ -31,6 +31,8 @@ class LifeEventExtractor:
     
     SYSTEM_PROMPT = """你是一位专业的人生传记分析师。你的任务是从文本中提取叙述者的重要人生事件。
 
+**引号使用规则**：事件摘要文本中引用词汇或概念时，只使用中文单引号（'词汇'），严禁使用中文双引号（"词汇"）或英文引号（"word"），以避免与JSON语法冲突。
+
 **输出格式（JSON数组）**：
 [
   {
@@ -47,7 +49,10 @@ class LifeEventExtractor:
 
 如果没有找到重要事件，返回空数组 []
 
-**重要：只返回JSON数组，不要添加任何解释、分析或其他文字。**"""
+**严格禁止**：
+- 不要用```json或```包裹输出
+- 不要添加任何解释文字
+- 直接输出JSON数组，**输出需要以 ] 结束，需要以 [ 开始**。"""
     
     USER_PROMPT_TEMPLATE = """请从以下文本中提取{narrator_name}的重要人生事件。
 
@@ -143,12 +148,10 @@ class LifeEventExtractor:
                 logger.warning(f"响应不是数组格式: {type(events)}")
                 return []
             
-            # 验证每个事件并添加元数据
-            timestamp = datetime.now().isoformat()
+            # 验证每个事件
             valid_events = []
             for event in events:
                 if self._validate_event(event):
-                    event['extracted_at'] = timestamp
                     valid_events.append(event)
                 else:
                     logger.warning(f"事件格式无效，跳过: {event}")

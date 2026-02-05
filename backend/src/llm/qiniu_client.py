@@ -36,6 +36,23 @@ class AsyncQiniuAIClient:
     - 429错误直接抛出，由上层处理
     """
     
+    # 类级别的日志配置（所有实例共享同一个日志目录）
+    _log_dir = None
+    _call_counter = 0
+    _counter_lock = None
+    
+    @classmethod
+    def _init_shared_log_dir(cls):
+        """初始化共享日志目录（类方法，只执行一次）"""
+        if cls._log_dir is None:
+            from datetime import datetime
+            from pathlib import Path
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            cls._log_dir = Path(__file__).parent.parent.parent.parent / ".log" / "API_generate_database" / timestamp
+            cls._log_dir.mkdir(parents=True, exist_ok=True)
+            cls._counter_lock = asyncio.Lock()
+            logger.info(f"API日志目录初始化: {cls._log_dir}")
+    
     def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config or get_settings().llm
         self.base_url = self.config.base_url
@@ -51,14 +68,8 @@ class AsyncQiniuAIClient:
             "Content-Type": "application/json",
         }
         
-        # API调用日志
-        from datetime import datetime
-        from pathlib import Path
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_dir = Path(__file__).parent.parent.parent.parent / ".log" / "API_generate_database" / timestamp
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        self._call_counter = 0
-        self._counter_lock = asyncio.Lock()
+        # 确保共享日志目录已初始化
+        self._init_shared_log_dir()
     
     async def chat(
         self,
@@ -121,9 +132,9 @@ class AsyncQiniuAIClient:
                 raw_response=result,
             )
 
-            # 记录API调用
+            # 记录成功的API调用
             await self._log_api_call(
-                request_type="generate_structured",
+                request_type="chat_success",
                 messages=messages,
                 model=model,
                 raw_response=response.content,
@@ -133,6 +144,16 @@ class AsyncQiniuAIClient:
             return response
             
         except httpx.HTTPStatusError as e:
+            # 记录HTTP错误的API调用
+            error_response = f"HTTP {e.response.status_code}: {e.response.text[:500]}"
+            await self._log_api_call(
+                request_type=f"chat_error_{e.response.status_code}",
+                messages=messages,
+                model=model,
+                raw_response=error_response,
+                kwargs={**kwargs, "error": str(e)}
+            )
+            
             # 所有HTTP错误都抛给上层ConcurrencyManager统一处理
             # - 429: 需要切换密钥
             # - 5xx: 可以重试
@@ -141,6 +162,16 @@ class AsyncQiniuAIClient:
             raise
             
         except Exception as e:
+            # 记录其他异常的API调用
+            error_response = f"Exception: {type(e).__name__}: {str(e)}"
+            await self._log_api_call(
+                request_type="chat_exception",
+                messages=messages,
+                model=model,
+                raw_response=error_response,
+                kwargs={**kwargs, "error": str(e)}
+            )
+            
             logger.error(f"Async 七牛云 AI chat error: {e}")
             if hasattr(e, 'response') and e.response:
                  logger.error(f"Response Body: {e.response.text}")
@@ -182,9 +213,10 @@ class AsyncQiniuAIClient:
     ):
         """记录API调用详情到日志文件"""
         try:
-            async with self._counter_lock:
-                self._call_counter += 1
-                call_id = self._call_counter
+            # 使用类级别的计数器（线程安全）
+            async with self.__class__._counter_lock:
+                self.__class__._call_counter += 1
+                call_id = self.__class__._call_counter
             
             from datetime import datetime
             timestamp = datetime.now().strftime("%H%M%S")
@@ -199,8 +231,17 @@ class AsyncQiniuAIClient:
             # 按照各提取器的特征词精确判断
             if "人生传记分析师" in prompt_content and "重要人生事件" in prompt_content:
                 extractor_name = "life_event"
-            elif "人物性格分析师" in prompt_content and "性格特点" in prompt_content:
+            elif "人物性格分析师" in prompt_content or "心理学专家和文学作家" in prompt_content:
                 extractor_name = "character_profile"
+            elif "哲学家和思想史研究者" in prompt_content:
+                extractor_name = "worldview"
+            elif "语言学家和命名规范专家" in prompt_content:
+                extractor_name = "alias"
+            elif "专业的人生传记整理专家" in prompt_content:
+                if "不确定年份" in prompt_content or "9999" in prompt_content:
+                    extractor_name = "uncertain_event"
+                else:
+                    extractor_name = "event_dedup"
             elif "个人回忆录知识图谱" in prompt_content and "命名实体" in prompt_content:
                 extractor_name = "entity"
             elif "资深传记作家" in prompt_content and "人生事件" in prompt_content:
@@ -213,7 +254,7 @@ class AsyncQiniuAIClient:
                 extractor_name = "temporal"
             
             filename = f"{timestamp}_{call_id:04d}_{extractor_name}.json"
-            filepath = self.log_dir / filename
+            filepath = self.__class__._log_dir / filename
             
             log_data = {
                 "call_id": call_id,

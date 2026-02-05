@@ -203,10 +203,8 @@ class ExtractionPipeline:
         # 步骤3: LLM精炼去重
         self._print_step(3, 5, "LLM精炼去重")
         
-        
-        # 创建LLM客户端用于精炼
-        refine_llm = self.concurrency_manager.clients[0]
-        refiner = RefinementPipeline(self.sqlite_client, refine_llm)
+        # 使用全局并发管理器进行精炼
+        refiner = RefinementPipeline(self.sqlite_client, self.concurrency_manager)
         
         # 执行精炼流程
         refine_stats = await refiner.refine_all()
