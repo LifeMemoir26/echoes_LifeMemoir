@@ -41,12 +41,7 @@ class EventWriter:
             return 0
         
         try:
-            # 为每个事件添加写入时间戳
-            for event in events:
-                if 'written_at' not in event:
-                    event['written_at'] = datetime.now().isoformat()
-            
-            # 批量写入
+            # 直接批量写入（created_at由数据库自动生成）
             count = self.sqlite_client.insert_events(events)
             logger.info(f"成功写入 {count} 条事件记录")
             return count

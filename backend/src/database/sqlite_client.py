@@ -69,9 +69,6 @@ class SQLiteClient:
                 year TEXT NOT NULL,
                 time_detail TEXT,
                 event_summary TEXT NOT NULL,
-                chunk_source TEXT,
-                extracted_at TEXT,
-                written_at TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -82,12 +79,6 @@ class SQLiteClient:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 personality TEXT,
                 worldview TEXT,
-                narrator_name TEXT,
-                chunk_source TEXT,
-                extracted_at TEXT,
-                written_at TEXT,
-                profile_type TEXT,
-                merge_info TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -98,19 +89,14 @@ class SQLiteClient:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 main_name TEXT NOT NULL,
                 alias_names TEXT NOT NULL,
-                entity_type TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                entity_type TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
-        # 注意：vector_chunks和chunk_summaries已迁移到独立的chunks.db
-        # 新的向量数据库使用 vector_store/chunk_store.py 管理
         
         # 创建索引
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_year ON life_events(year)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_summary ON life_events(event_summary)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_profiles_type ON character_profiles(profile_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_aliases_main_name ON aliases(main_name)")
         
         self.conn.commit()
@@ -135,15 +121,12 @@ class SQLiteClient:
         for event in events:
             cursor.execute("""
                 INSERT OR REPLACE INTO life_events 
-                (year, time_detail, event_summary, chunk_source, extracted_at, written_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (year, time_detail, event_summary)
+                VALUES (?, ?, ?)
             """, (
                 event.get('year'),
                 event.get('time_detail'),
-                event.get('event_summary'),
-                event.get('chunk_source'),
-                event.get('extracted_at'),
-                event.get('written_at')
+                event.get('event_summary')
             ))
             count += 1
         
@@ -163,32 +146,22 @@ class SQLiteClient:
         """
         cursor = self.conn.cursor()
         
-        # personality和worldview是字符串（总结后的一段话），直接存储
-        # merge_info是字典，需要JSON序列化
-        # 别名已单独存储在aliases表中，此处不再存储
+        # personality和worldview严格要求为str格式（描述性段落文字）
         personality = profile.get('personality', '')
         worldview = profile.get('worldview', '')
-        merge_info = json.dumps(profile.get('merge_info', {}), ensure_ascii=False)
         
         cursor.execute("""
             INSERT OR REPLACE INTO character_profiles 
-            (personality, worldview, narrator_name, chunk_source, 
-             extracted_at, written_at, profile_type, merge_info)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (personality, worldview)
+            VALUES (?, ?)
         """, (
             personality,
-            worldview,
-            profile.get('narrator_name'),
-            profile.get('chunk_source'),
-            profile.get('extracted_at'),
-            profile.get('written_at'),
-            profile.get('profile_type'),
-            merge_info
+            worldview
         ))
         
         self.conn.commit()
         profile_id = str(cursor.lastrowid)
-        logger.info(f"插入人物特征档案: {profile.get('profile_type')}, ID={profile_id}")
+        logger.info(f"插入人物特征档案, ID={profile_id}")
         return profile_id
     
     def get_all_events(self, sort_by_year: bool = True) -> List[Dict[str, Any]]:
@@ -230,13 +203,6 @@ class SQLiteClient:
         for row in cursor.fetchall():
             profile = dict(row)
             profile['_id'] = str(profile['id'])
-            
-            # personality和worldview是字符串，不需要解析
-            # merge_info是JSON，需要解析
-            # aliases已移至aliases表，此处不再读取
-            if profile.get('merge_info'):
-                profile['merge_info'] = json.loads(profile['merge_info'])
-            
             profiles.append(profile)
         
         return profiles
@@ -247,39 +213,35 @@ class SQLiteClient:
         
         Returns:
             合并后的人物特征字典，如果没有数据则返回None
+            - personality: 合并后的性格描述字符串
+            - worldview: 合并后的世界观描述字符串
         """
         profiles = self.get_character_profiles()
         
         if not profiles:
             return None
         
-        # 合并所有档案
-        merged = {
-            'personality': [],
-            'worldview': []
-        }
+        # 收集所有非空段落
+        personality_parts = []
+        worldview_parts = []
         
         for profile in profiles:
-            # personality和worldview可能是字符串或列表
+            # personality和worldview是字符串格式（描述性段落）
             if profile.get('personality'):
-                p = profile['personality']
-                if isinstance(p, str):
-                    if p.strip():  # 非空字符串
-                        merged['personality'].append(p)
-                elif isinstance(p, list):
-                    merged['personality'].extend(p)
+                p = profile['personality'].strip()
+                if p:
+                    personality_parts.append(p)
             
             if profile.get('worldview'):
-                w = profile['worldview']
-                if isinstance(w, str):
-                    if w.strip():  # 非空字符串
-                        merged['worldview'].append(w)
-                elif isinstance(w, list):
-                    merged['worldview'].extend(w)
+                w = profile['worldview'].strip()
+                if w:
+                    worldview_parts.append(w)
         
-        # 去重
-        merged['personality'] = list(dict.fromkeys(merged['personality']))
-        merged['worldview'] = list(dict.fromkeys(merged['worldview']))
+        # 拼接成完整段落（用双换行符分隔不同来源的段落）
+        merged = {
+            'personality': '\n\n'.join(personality_parts) if personality_parts else '',
+            'worldview': '\n\n'.join(worldview_parts) if worldview_parts else ''
+        }
         
         return merged
     
@@ -379,142 +341,6 @@ class SQLiteClient:
         cursor.execute("DELETE FROM character_profiles")
         self.conn.commit()
         logger.warning(f"已清空用户 {self.username} 的所有数据")
-    
-    # ==================== Vector Chunks 相关方法 ====================
-    
-    def insert_chunks(
-        self,
-        chunks: List[Dict[str, Any]],
-        source_dialogue_id: Optional[str] = None
-    ) -> List[int]:
-        """
-        批量插入向量chunks
-        
-        Args:
-            chunks: chunk列表，每个包含 chunk_text, start_pos, end_pos
-            source_dialogue_id: 来源对话ID（可选）
-            
-        Returns:
-            插入的chunk ID列表
-        """
-        if not chunks:
-            return []
-        
-        cursor = self.conn.cursor()
-        chunk_ids = []
-        
-        for i, chunk in enumerate(chunks):
-            cursor.execute("""
-                INSERT INTO vector_chunks 
-                (chunk_text, start_pos, end_pos, chunk_index, source_dialogue_id)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                chunk['chunk_text'],
-                chunk['start_pos'],
-                chunk['end_pos'],
-                i,
-                source_dialogue_id
-            ))
-            chunk_ids.append(cursor.lastrowid)
-        
-        self.conn.commit()
-        logger.info(f"插入 {len(chunk_ids)} 个chunks")
-        return chunk_ids
-    
-    def insert_summaries(
-        self,
-        chunk_id: int,
-        summaries: List[str],
-        vector_ids: Optional[List[str]] = None
-    ) -> int:
-        """
-        为指定chunk插入摘要
-        
-        Args:
-            chunk_id: chunk ID
-            summaries: 摘要列表
-            vector_ids: 向量库中的ID列表（可选）
-            
-        Returns:
-            插入的摘要数量
-        """
-        if not summaries:
-            return 0
-        
-        cursor = self.conn.cursor()
-        
-        if vector_ids is None:
-            vector_ids = [None] * len(summaries)
-        
-        for summary, vector_id in zip(summaries, vector_ids):
-            cursor.execute("""
-                INSERT INTO chunk_summaries (chunk_id, summary_text, vector_id)
-                VALUES (?, ?, ?)
-            """, (chunk_id, summary, vector_id))
-        
-        self.conn.commit()
-        logger.info(f"为chunk {chunk_id} 插入 {len(summaries)} 个摘要")
-        return len(summaries)
-    
-    def get_chunk_by_id(self, chunk_id: int) -> Optional[Dict[str, Any]]:
-        """
-        根据ID获取chunk
-        
-        Args:
-            chunk_id: chunk ID
-            
-        Returns:
-            chunk字典，如果不存在返回None
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM vector_chunks WHERE id = ?
-        """, (chunk_id,))
-        
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
-        return None
-    
-    def get_summaries_by_chunk_id(self, chunk_id: int) -> List[Dict[str, Any]]:
-        """
-        获取指定chunk的所有摘要
-        
-        Args:
-            chunk_id: chunk ID
-            
-        Returns:
-            摘要列表
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT * FROM chunk_summaries WHERE chunk_id = ?
-        """, (chunk_id,))
-        
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-    
-    def get_all_chunks(self) -> List[Dict[str, Any]]:
-        """
-        获取所有chunks
-        
-        Returns:
-            chunk列表
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM vector_chunks ORDER BY chunk_index")
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-    
-    def clear_vector_data(self):
-        """清空所有向量相关数据（chunks和summaries）"""
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM chunk_summaries")
-        cursor.execute("DELETE FROM vector_chunks")
-        self.conn.commit()
-        logger.info("已清空所有向量数据")
-    
-    # ==================== 原有方法 ====================
     
     def close(self):
         """关闭数据库连接"""

@@ -42,11 +42,7 @@ class CharacterWriter:
             return ""
         
         try:
-            # 添加写入时间戳和类型标识
-            profile['written_at'] = datetime.now().isoformat()
-            profile['profile_type'] = 'character_analysis'
-            
-            # 写入
+            # 直接写入（数据库表只有 personality 和 worldview 字段）
             doc_id = self.sqlite_client.insert_character_profile(profile)
             logger.info(f"成功写入人物特征档案: {doc_id}")
             return doc_id

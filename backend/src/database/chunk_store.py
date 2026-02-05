@@ -14,24 +14,45 @@ logger = logging.getLogger(__name__)
 class ChunkStore:
     """Chunk存储管理器"""
     
-    def __init__(self, db_path: str):
+    def __init__(self, username: str, data_base_dir: Optional[Path] = None):
         """
         初始化Chunk存储
         
         Args:
-            db_path: SQLite数据库路径
+            username: 用户名，用于创建独立的数据库
+            data_base_dir: 数据存储基础目录，默认为项目根目录/data
         """
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.username = username
         
-        # 连接数据库
-        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
+        # 确定数据存储路径
+        if data_base_dir:
+            self.data_dir = Path(data_base_dir) / username
+        else:
+            # 默认：项目根目录/data/{username}
+            project_root = Path(__file__).parent.parent.parent.parent
+            self.data_dir = project_root / "data" / username
         
-        # 创建表结构
-        self._create_tables()
+        # 创建数据目录
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"ChunkStore已初始化: {self.db_path}")
+        # SQLite数据库文件路径
+        self.db_path = self.data_dir / "chunks.db"
+        db_exists = self.db_path.exists()
+        
+        try:
+            # 连接数据库
+            self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+            
+            # 只有数据库不存在时才创建表结构
+            if not db_exists:
+                self._create_tables()
+                logger.info(f"ChunkStore已创建: 数据库={self.db_path}")
+            else:
+                logger.info(f"ChunkStore已连接: 数据库={self.db_path}")
+        except Exception as e:
+            logger.error(f"ChunkStore连接失败: {e}")
+            raise
     
     def _create_tables(self):
         """创建数据表"""
@@ -285,17 +306,3 @@ class ChunkStore:
             self.conn.close()
             logger.info("ChunkStore已关闭")
 
-
-def create_chunk_store(username: str, data_root: str = "./.data") -> ChunkStore:
-    """
-    创建ChunkStore的便捷函数
-    
-    Args:
-        username: 用户名
-        data_root: 数据根目录
-        
-    Returns:
-        ChunkStore实例
-    """
-    db_path = Path(data_root) / username / "chunks.db"
-    return ChunkStore(str(db_path))
