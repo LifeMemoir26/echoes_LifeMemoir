@@ -20,7 +20,8 @@
 配置：
 - 数据根目录：项目根目录/data
 - 测试文件：backend/examples/1.txt
-- 并发数：batch_size=15
+- 并发数：由ConcurrencyManager.concurrency_level控制
+- 向量编码批次：由EmbeddingConfig.batch_size控制
 """
 
 import sys
@@ -167,8 +168,7 @@ async def main():
         username=username,
         concurrency_manager=concurrency_manager,
         data_root=str(data_root),
-        model="deepseek-r1",
-        batch_size=recommended_concurrency
+        model="deepseek-v3"
     )
     
     print(f"  ✅ Pipeline初始化完成")

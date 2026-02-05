@@ -127,7 +127,7 @@ class UncertainEventRefiner:
             refined_events = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                model="deepseek-r1",
+                model="deepseek-v3",
                 temperature=0.2,  # 稍高温度以支持推理
                 max_tokens=16384
             )

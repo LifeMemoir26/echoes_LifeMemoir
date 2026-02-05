@@ -36,8 +36,7 @@ class VectorPipeline:
         username: str,
         concurrency_manager: ConcurrencyManager,
         data_root: str = "./.data",
-        model: str = "claude-3.7-sonnet",
-        batch_size: int = 5
+        model: str = "claude-3.7-sonnet"
     ):
         """
         初始化Pipeline
@@ -47,12 +46,15 @@ class VectorPipeline:
             concurrency_manager: 全局并发管理器（支持系统提示词分离）
             data_root: 数据根目录
             model: LLM模型名称
-            batch_size: 批处理大小（并发数）
         """
         self.username = username
         self.concurrency_manager = concurrency_manager
         self.model = model
-        self.batch_size = batch_size
+        
+        # 从配置读取batch_size
+        from ..config import EmbeddingConfig
+        embedding_config = EmbeddingConfig()
+        self.batch_size = embedding_config.batch_size
         
         # 初始化组件
         data_path = Path(data_root) / username
@@ -92,7 +94,7 @@ class VectorPipeline:
     
     async def process_text(self, text: str) -> Dict[str, Any]:
         """
-        处理完整文本，构建向量数据库
+        处理完整文本，构建向量数据库（流式处理：边提取边编码）
         
         Args:
             text: 原始对话文本
@@ -100,6 +102,8 @@ class VectorPipeline:
         Returns:
             处理结果统计
         """
+        import asyncio
+        
         logger.info(f"开始处理文本，长度: {len(text)}字符")
         
         # 步骤1: 文本切分
@@ -112,47 +116,43 @@ class VectorPipeline:
         aliases = self.alias_manager.get_aliases()
         logger.info(f"加载了 {len(aliases)} 个别名映射")
         
-        # 步骤3: 提取摘要（并发处理）
-        logger.info(f"步骤3: 并发提取摘要（批次大小={self.batch_size}）...")
-        all_summaries = await self.summary_extractor.extract_batch(
-            chunks=chunks,
-            aliases=aliases,
-            batch_size=self.batch_size
+        # 步骤3+4+5: 流式处理（提取→存储→编码）
+        # 架构：生产者-消费者模式
+        #   - 生产者：提取摘要 → 保存SQLite → 放入队列
+        #   - 消费者：从队列取摘要 → 累积batch → 编码存ChromaDB
+        logger.info("步骤3-5: 流式处理（边提取摘要边编码向量）...")
+        
+        # 创建队列用于传递摘要数据（生产者 → 消费者）
+        summary_queue = asyncio.Queue()
+        vector_count_result = {"count": 0}
+        
+        # 启动消费者任务（编码器在后台运行）
+        encoder_task = asyncio.create_task(
+            self._vector_encoder(summary_queue, vector_count_result)
         )
         
-        total_summaries = sum(len(s) for s in all_summaries)
-        logger.info(f"摘要提取完成，共 {total_summaries} 个摘要")
+        # 生产者：一次性提交所有chunks给CM，CM内部调度并发
+        # 每个chunk完成后：提取摘要 → 保存SQLite → 放入队列（不等其他chunk）
+        logger.info(f"开始批量提取 {len(chunks)} 个chunks的摘要（CM控制并发数={self.concurrency_manager.concurrency_level}）...")
         
-        # 步骤4: 存储chunks和摘要到SQLite
-        logger.info("步骤4: 存储chunks和摘要到SQLite...")
-        chunk_summary_mapping = {}
+        # 一次性提交所有chunks（asyncio.gather + CM信号量 = 全部交给CM调度）
+        # CM的信号量会控制实际并发数
+        # 每个chunk完成后立即保存+入队，不等其他chunk
+        summary_counts = await asyncio.gather(*[
+            self._process_and_queue_chunk(idx, chunk, aliases, summary_queue, len(chunks), vector_count_result)
+            for idx, chunk in enumerate(chunks)
+        ])
         
-        for chunk_idx, (chunk_text, summaries) in enumerate(zip(chunks, all_summaries)):
-            # 保存chunk
-            chunk_id = self.chunk_store.save_chunk(
-                chunk_text=chunk_text,
-                chunk_index=chunk_idx
-            )
-            
-            # 保存摘要
-            if summaries:
-                summary_ids = self.chunk_store.save_summaries(
-                    chunk_id=chunk_id,
-                    summaries=summaries
-                )
-                chunk_summary_mapping[chunk_id] = summary_ids
-            
-            # 定期垃圾回收
-            if (chunk_idx + 1) % 50 == 0:
-                gc.collect()
-                logger.debug(f"处理 {chunk_idx + 1}/{len(chunks)} chunks后执行垃圾回收")
+        total_summaries = sum(summary_counts)
+        logger.info(f"所有chunks提取完成，共 {total_summaries} 个摘要")
         
-        logger.info(f"SQLite存储完成，chunks: {len(chunks)}, 摘要: {total_summaries}")
+        # 发送结束信号
+        await summary_queue.put(None)
         
-        # 步骤5: 编码摘要并存入ChromaDB
-        logger.info("步骤5: 编码摘要并存入ChromaDB...")
-        vector_count = await self._encode_and_store_summaries(chunk_summary_mapping)
-        logger.info(f"向量编码完成，存储了 {vector_count} 个向量")
+        # 等待编码完成
+        await encoder_task
+        
+        logger.info(f"处理完成: chunks={len(chunks)}, 摘要={total_summaries}, 向量={vector_count_result['count']}")
         
         # 最终垃圾回收
         gc.collect()
@@ -161,7 +161,7 @@ class VectorPipeline:
         stats = {
             "chunks_count": len(chunks),
             "summaries_count": total_summaries,
-            "vectors_count": vector_count,
+            "vectors_count": vector_count_result["count"],
             "aliases_count": len(aliases),
             "chunk_store_stats": self.chunk_store.get_stats()
         }
@@ -169,6 +169,148 @@ class VectorPipeline:
         logger.info(f"向量数据库构建完成: {stats}")
         
         return stats
+    
+    async def _vector_encoder(
+        self,
+        summary_queue: "asyncio.Queue",
+        vector_count_result: Dict[str, int]
+    ):
+        """
+        消费者：从队列取摘要 → 累积到batch_size → 批量编码存ChromaDB
+        
+        Args:
+            summary_queue: 摘要数据队列
+            vector_count_result: 已编码向量计数（引用传递）
+        """
+        batch_buffer = []
+        vector_id_mapping = {}
+        
+        while True:
+            item = await summary_queue.get()
+            
+            # 检查结束信号
+            if item is None:
+                # 处理剩余的buffer
+                if batch_buffer:
+                    logger.info(f"编码最后一批 ({len(batch_buffer)}个摘要)")
+                    await self._encode_batch(batch_buffer, vector_id_mapping)
+                    vector_count_result["count"] += len(batch_buffer)
+                
+                # 更新SQLite中的vector_id（关联SQLite和ChromaDB）
+                if vector_id_mapping:
+                    logger.info(f"更新SQLite中的vector_id映射 ({len(vector_id_mapping)}条)...")
+                    self.chunk_store.batch_update_vector_ids(vector_id_mapping)
+                
+                summary_queue.task_done()
+                break
+            
+            batch_buffer.append(item)
+            
+            # 达到batch_size就编码一次（批量提高效率）
+            if len(batch_buffer) >= self.batch_size:
+                logger.info(f"编码一批 ({len(batch_buffer)}个摘要) - 队列剩余: {summary_queue.qsize()}")
+                await self._encode_batch(batch_buffer, vector_id_mapping)
+                vector_count_result["count"] += len(batch_buffer)
+                batch_buffer = []
+            
+            summary_queue.task_done()
+    
+    async def _process_and_queue_chunk(
+        self,
+        chunk_idx: int,
+        chunk_text: str,
+        aliases: Dict[str, List[str]],
+        summary_queue: "asyncio.Queue",
+        chunks_total: int,
+        vector_count_result: Dict[str, int]
+    ) -> int:
+        """
+        生产者：处理单个chunk
+        1. 调用CM提取摘要（CM内部用信号量控制并发数）
+        2. 保存chunk到SQLite
+        3. 保存摘要到SQLite
+        4. 摘要数据放入队列（消费者会立即开始编码）
+        
+        Args:
+            chunk_idx: chunk索引
+            chunk_text: chunk文本
+            aliases: 别名映射表
+            summary_queue: 摘要队列
+            chunks_total: chunks总数
+            vector_count_result: 已编码向量计数（引用传递）
+            
+        Returns:
+            该chunk提取的摘要数量
+        """
+        # 1. 提取摘要（CM内部并发调度）
+        summaries = await self.summary_extractor.extract_summaries(chunk_text, aliases)
+        
+        # 2. 保存chunk到SQLite
+        chunk_id = self.chunk_store.save_chunk(
+            chunk_text=chunk_text,
+            chunk_index=chunk_idx
+        )
+        
+        # 3. 保存摘要到SQLite + 立即放入编码队列
+        summary_count = 0
+        if summaries:
+            summary_ids = self.chunk_store.save_summaries(
+                chunk_id=chunk_id,
+                summaries=summaries
+            )
+            
+            # 4. 摘要排队等待编码（流式：不等其他chunk完成）
+            for summary_id, summary_text in zip(summary_ids, summaries):
+                await summary_queue.put({
+                    "summary_id": summary_id,
+                    "chunk_id": chunk_id,
+                    "text": summary_text
+                })
+                summary_count += 1
+        
+        # 定期垃圾回收
+        if (chunk_idx + 1) % 50 == 0:
+            gc.collect()
+        
+        return summary_count
+    
+    async def _encode_batch(
+        self,
+        batch: List[Dict[str, Any]],
+        vector_id_mapping: Dict[int, str]
+    ):
+        """
+        编码一批摘要并存入ChromaDB
+        
+        Args:
+            batch: 摘要数据列表 [{"summary_id": int, "chunk_id": int, "text": str}, ...]
+            vector_id_mapping: vector_id映射字典（会被更新）
+        """
+        if not batch:
+            return
+        
+        # 准备数据
+        texts = [item["text"] for item in batch]
+        ids = [f"sum_{item['summary_id']}" for item in batch]
+        metadatas = [
+            {
+                "summary_id": item["summary_id"],
+                "chunk_id": item["chunk_id"],
+                "text": item["text"]
+            }
+            for item in batch
+        ]
+        
+        # 添加到ChromaDB
+        self.vector_store.add_documents(
+            documents=texts,
+            ids=ids,
+            metadatas=metadatas
+        )
+        
+        # 记录映射关系
+        for item, vector_id in zip(batch, ids):
+            vector_id_mapping[item["summary_id"]] = vector_id
     
     async def _encode_and_store_summaries(
         self, 
@@ -201,11 +343,11 @@ class VectorPipeline:
             logger.warning("没有摘要需要编码")
             return 0
         
-        # 批量编码和存储（避免一次性占用太多内存）
-        batch_size = 32  # 向量编码批次大小
+        # 批量编码和存储（使用self.batch_size控制批次大小）
+        logger.info(f"使用批次大小 {self.batch_size} 进行向量编码")
         
-        for i in range(0, len(all_summary_data), batch_size):
-            batch = all_summary_data[i:i+batch_size]
+        for i in range(0, len(all_summary_data), self.batch_size):
+            batch = all_summary_data[i:i+self.batch_size]
             
             # 准备数据
             texts = [item["text"] for item in batch]
@@ -233,9 +375,9 @@ class VectorPipeline:
             vector_count += len(batch)
             
             # 定期垃圾回收
-            if (i + batch_size) % 100 == 0:
+            if (i + self.batch_size) % 100 == 0:
                 gc.collect()
-                logger.debug(f"编码 {i + batch_size}/{len(all_summary_data)} 后执行垃圾回收")
+                logger.debug(f"编码 {i + self.batch_size}/{len(all_summary_data)} 后执行垃圾回收")
         
         # 更新SQLite中的vector_id
         logger.info("更新SQLite中的vector_id映射...")
@@ -301,8 +443,7 @@ async def test_vector_pipeline():
     pipeline = VectorPipeline(
         username="test_user",
         concurrency_manager=concurrency_manager,
-        model="claude-3.7-sonnet",
-        batch_size=3
+        model="claude-3.7-sonnet"
     )
     
     # 测试文本

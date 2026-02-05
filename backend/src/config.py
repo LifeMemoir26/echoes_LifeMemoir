@@ -82,7 +82,7 @@ class EmbeddingConfig(BaseSettings):
         description="嵌入模型名称"
     )
     dimension: int = Field(default=1792, description="嵌入维度")
-    batch_size: int = Field(default=32, description="批处理大小")
+    batch_size: int = Field(default=32, description="向量编码批次大小")
     
     class Config:
         env_prefix = "EMBEDDING_"
@@ -99,9 +99,6 @@ class ExtractionConfig(BaseSettings):
     max_events_per_chunk: int = Field(default=10, description="每块最大事件数")
     confidence_threshold: float = Field(default=0.6, description="置信度阈值")
     
-    # 批处理配置（并发控制）
-    # 注意：2GB内存建议设为1-3，4GB+可设为5-10
-    batch_size: int = Field(default=15, description="并行处理的块数")
     max_retries: int = Field(default=3, description="失败重试次数")
     
     class Config:

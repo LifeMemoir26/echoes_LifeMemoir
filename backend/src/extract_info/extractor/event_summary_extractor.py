@@ -135,88 +135,45 @@ class EventSummaryExtractor:
     async def extract_batch(
         self,
         chunks: List[str],
-        aliases: Dict[str, List[str]],
-        batch_size: int = 5
+        aliases: Dict[str, List[str]]
     ) -> List[List[str]]:
         """
-        批量提取摘要（带并发控制）
+        批量提取摘要（全并发，由ConcurrencyManager控制并发数）
         
         Args:
             chunks: chunk文本列表
             aliases: 别名映射表
-            batch_size: 批次大小（内存受限时应设为1）
             
         Returns:
             每个chunk对应的摘要列表
         """
         import asyncio
         
-        results = []
         total = len(chunks)
+        logger.info(f"开始处理 {total} 个chunks（全并发，CM自动控制并发数）")
         
-        for i in range(0, total, batch_size):
-            batch = chunks[i:i+batch_size]
-            batch_num = i // batch_size + 1
-            
-            logger.info(f"处理批次 {batch_num}/{(total + batch_size - 1) // batch_size}, "
-                       f"包含 {len(batch)} 个chunks")
-            
-            # 并发处理当前批次
-            tasks = [
-                self.extract_summaries(chunk, aliases)
-                for chunk in batch
-            ]
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # 处理异常
-            for j, result in enumerate(batch_results):
-                if isinstance(result, Exception):
-                    logger.error(f"Chunk {i+j} 处理失败: {result}")
-                    results.append([])
-                else:
-                    results.append(result)
-            
-            # 手动垃圾回收（内存优化）
-            if batch_num % 10 == 0:
-                import gc
-                gc.collect()
-                logger.debug(f"批次 {batch_num} 完成后执行垃圾回收")
+        # 创建所有任务（全并发）
+        tasks = [
+            self.extract_summaries(chunk, aliases)
+            for chunk in chunks
+        ]
         
-        return results
+        # 一次性并发执行所有任务，ConcurrencyManager的信号量会自动限制并发数
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 处理异常
+        processed_results = []
+        failed_count = 0
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Chunk {i} 处理失败: {result}")
+                processed_results.append([])
+                failed_count += 1
+            else:
+                processed_results.append(result)
+        
+        logger.info(f"处理完成: 成功 {total - failed_count}/{total}")
+        
+        return processed_results
 
 
-def test_summary_extractor():
-    """测试摘要提取器"""
-    import asyncio
-    from ...config import get_settings
-    from ...llm.qiniu_client import AsyncQiniuAIClient
-    
-    async def run_test():
-        # 初始化配置和客户端
-        config = get_settings()
-        llm_client = AsyncQiniuAIClient(config=config.llm)
-        
-        extractor = EventSummaryExtractor(llm_client, model="claude-3.7-sonnet")
-        
-        # 测试数据
-        chunk_text = """[Interview] 1980年代初期
-[Interviewer] 能说说您在纽约的那段经历吗？
-[Inventer] 那时候我刚到纽约，一切都很新鲜。我在曼哈顿租了个小公寓，开始在父亲的公司工作。最让我印象深刻的是，我主导修复并重新开放了沃尔曼溜冰场，这个项目让很多纽约人很开心。"""
-        
-        aliases = {
-            "唐纳德·特朗普": ["川普", "特朗普", "老特"],
-            "沃尔曼溜冰场": ["沃尔冰场", "中央公园溜冰场"]
-        }
-        
-        summaries = await extractor.extract_summaries(chunk_text, aliases)
-        
-        print(f"\n提取到 {len(summaries)} 个摘要：")
-        for i, summary in enumerate(summaries, 1):
-            print(f"{i}. {summary}")
-    
-    asyncio.run(run_test())
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    test_summary_extractor()

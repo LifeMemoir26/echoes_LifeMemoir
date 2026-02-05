@@ -131,12 +131,12 @@ class VectorStore:
         import time
         start_time = time.time()
         
-        # 批量编码，优化参数
+        # 批量编码（batch_size由VectorPipeline控制，这里直接处理传入的所有文本）
         embeddings = self.encoder.encode(
             texts, 
             show_progress_bar=False,
             convert_to_numpy=True,  # 直接返回numpy，避免tensor转换
-            batch_size=32  # 批量处理，提高效率
+            batch_size=len(texts)  # 一次处理所有文本（已由外层控制批次）
         )
         
         encode_time = time.time() - start_time
