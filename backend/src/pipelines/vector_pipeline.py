@@ -74,7 +74,7 @@ class VectorPipeline:
         )
         
         # Chunk存储
-        chunk_db_path = data_path / "chunks.db"
+        chunk_db_path = data_path 
         self.chunk_store = ChunkStore(str(chunk_db_path))
         
         # 向量存储（collection名称必须是ASCII字符）
@@ -89,7 +89,7 @@ class VectorPipeline:
         
         logger.info(
             f"VectorPipeline已初始化 - 用户: {username}, "
-            f"模型: {model}, 批次大小: {batch_size}"
+            f"模型: {model}, 批次大小: {self.batch_size}"
         )
     
     async def process_text(self, text: str) -> Dict[str, Any]:

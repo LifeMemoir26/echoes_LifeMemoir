@@ -33,11 +33,18 @@ class ChunkStore:
             self.data_dir = project_root / "data" / username
         
         # 创建数据目录
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"数据目录确认: {self.data_dir}")
+        except Exception as e:
+            logger.error(f"创建数据目录失败: {self.data_dir}, 错误: {e}")
+            raise
         
         # SQLite数据库文件路径
         self.db_path = self.data_dir / "chunks.db"
         db_exists = self.db_path.exists()
+        
+        logger.info(f"ChunkStore 初始化: 数据库路径={self.db_path}, 已存在={db_exists}")
         
         try:
             # 连接数据库
