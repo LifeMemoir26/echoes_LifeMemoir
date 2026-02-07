@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Any
 from ..database.sqlite_client import SQLiteClient
 from ..database.chunk_store import ChunkStore
 from ..generate.timeline_generator import TimelineGenerator
+from ..generate.memoir_generator import MemoirGenerator
 from ..llm.concurrency_manager import ConcurrencyManager
 
 logger = logging.getLogger(__name__)
@@ -271,3 +272,195 @@ class GenerationTimelinePipeline:
         self.sqlite_client.close()
         self.chunk_store.close()
         logger.info("GenerationTimelinePipeline已关闭")
+
+
+class GenerationMemoirPipeline:
+    """
+    回忆录生成Pipeline
+    
+    负责协调回忆录的生成流程：
+    1. 从数据库提取所有人生事件
+    2. 随机选取语言样本
+    3. 调用生成器生成回忆录
+    4. 保存结果
+    """
+    
+    def __init__(
+        self,
+        username: str,
+        concurrency_manager: ConcurrencyManager,
+        data_base_dir: Optional[Path] = None,
+        verbose: bool = False
+    ):
+        """
+        初始化回忆录生成Pipeline
+        
+        Args:
+            username: 用户名
+            concurrency_manager: 并发管理器实例
+            data_base_dir: 数据存储目录（默认为项目根目录/data）
+            verbose: 是否打印详细信息
+        """
+        self.username = username
+        self.verbose = verbose
+        self.concurrency_manager = concurrency_manager
+        
+        # 初始化数据库客户端
+        self.sqlite_client = SQLiteClient(
+            username=username,
+            data_base_dir=data_base_dir
+        )
+        
+        self.chunk_store = ChunkStore(
+            username=username,
+            data_base_dir=data_base_dir
+        )
+        
+        # 初始化生成器
+        self.memoir_generator = MemoirGenerator(
+            concurrency_manager=concurrency_manager
+        )
+        
+        logger.info(f"GenerationMemoirPipeline初始化完成: 用户={username}")
+    
+    def _print_step(self, message: str):
+        """打印步骤信息"""
+        if self.verbose:
+            print(f"\n▸ {message}")
+    
+    async def generate_memoir(
+        self,
+        target_length: int = 2000,
+        language_sample_count: int = 20,
+        user_preferences: Optional[str] = None
+    ) -> str:
+        """
+        生成个人回忆录
+        
+        Args:
+            target_length: 目标文本长度（默认2000字，不超过20000字）
+            language_sample_count: 语言样本数量（默认20个）
+            user_preferences: 用户偏好或希望模型的侧重点
+            
+        Returns:
+            回忆录文本（纯文本）
+        """
+        self._print_step("开始生成回忆录...")
+        
+        # 限制长度范围
+        if target_length > 20000:
+            target_length = 20000
+            if self.verbose:
+                print("   ⚠️  长度超出上限，已调整为20000字")
+        elif target_length < 500:
+            target_length = 500
+            if self.verbose:
+                print("   ⚠️  长度过短，已调整为500字")
+        
+        # 步骤1: 从数据库提取所有人生事件
+        self._print_step("1/3: 从数据库提取人生事件...")
+        all_events = self.sqlite_client.get_all_events(sort_by_year=True)
+        
+        if not all_events:
+            logger.warning("数据库中没有人生事件，无法生成回忆录")
+            if self.verbose:
+                print("⚠️  数据库中没有人生事件")
+            return ""
+        
+        if self.verbose:
+            print(f"   提取到 {len(all_events)} 个人生事件")
+        
+        # 步骤2: 随机选取语言样本
+        self._print_step("2/3: 随机选取语言样本...")
+        random_chunks = self.chunk_store.get_random_chunks(language_sample_count)
+        language_samples = [chunk['chunk_text'] for chunk in random_chunks]
+        
+        if self.verbose:
+            print(f"   语言样本: {len(language_samples)} 个chunks")
+        
+        # 步骤3: 生成回忆录
+        self._print_step("3/3: 生成回忆录...")
+        if self.verbose:
+            print(f"   目标长度: {target_length}字")
+            if user_preferences:
+                print(f"   用户偏好: {user_preferences}")
+        
+        memoir_text = await self.memoir_generator.generate_memoir(
+            events=all_events,
+            language_samples=language_samples,
+            target_length=target_length,
+            user_preferences=user_preferences
+        )
+        
+        if not memoir_text:
+            logger.warning("回忆录生成失败")
+            if self.verbose:
+                print("⚠️  回忆录生成失败")
+            return ""
+        
+        if self.verbose:
+            actual_length = len(memoir_text)
+            print(f"✅ 回忆录生成完成: {actual_length}字")
+        
+        logger.info(f"回忆录生成成功: {len(memoir_text)}字")
+        
+        return memoir_text
+    
+    def save_memoir(
+        self,
+        memoir_text: str,
+        output_dir: Optional[Path] = None
+    ) -> tuple[Path, Path]:
+        """
+        将回忆录保存为文本和JSON两种格式
+        
+        Args:
+            memoir_text: 回忆录文本
+            output_dir: 输出目录（默认为data/{username}/output）
+            
+        Returns:
+            (txt_path, json_path) 两个文件的路径
+        """
+        import json
+        from datetime import datetime
+        
+        # 确定输出目录
+        if output_dir is None:
+            output_dir = self.sqlite_client.data_dir / "output"
+        
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 保存文本格式
+        txt_path = output_dir / "memoir.txt"
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(f"个人回忆录 - {self.username}\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(memoir_text)
+            f.write("\n\n" + "=" * 60 + "\n")
+        
+        # 保存JSON格式
+        json_path = output_dir / "memoir.json"
+        data = {
+            "username": self.username,
+            "generated_at": datetime.now().isoformat(),
+            "length": len(memoir_text),
+            "content": memoir_text
+        }
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"回忆录已保存: TXT={txt_path}, JSON={json_path}")
+        if self.verbose:
+            print(f"\n💾 回忆录已保存:")
+            print(f"   文本格式: {txt_path}")
+            print(f"   JSON格式: {json_path}")
+        
+        return txt_path, json_path
+    
+    def close(self):
+        """关闭数据库连接"""
+        self.sqlite_client.close()
+        self.chunk_store.close()
+        logger.info("GenerationMemoirPipeline已关闭")
