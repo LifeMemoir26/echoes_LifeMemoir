@@ -71,8 +71,7 @@ class ChunkStore:
                 chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chunk_text TEXT NOT NULL,
                 chunk_index INTEGER NOT NULL,
-                start_pos INTEGER,
-                end_pos INTEGER,
+                chunk_source TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -103,12 +102,39 @@ class ChunkStore:
         self.conn.commit()
         logger.info("数据表创建完成")
     
+    def get_chunk_by_source_and_index(self, chunk_source: str, chunk_index: int) -> Optional[Dict[str, Any]]:
+        """
+        根据来源文件名和索引查找chunk
+        
+        Args:
+            chunk_source: 来源文件名
+            chunk_index: chunk索引
+            
+        Returns:
+            chunk字典或None
+        """
+        if not chunk_source:
+            return None
+            
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            SELECT * FROM chunks 
+            WHERE chunk_source = ? AND chunk_index = ?
+            LIMIT 1
+        """, (chunk_source, chunk_index))
+        
+        row = cursor.fetchone()
+        
+        if row:
+            return dict(row)
+        return None
+    
     def save_chunk(
         self, 
         chunk_text: str, 
         chunk_index: int,
-        start_pos: int = None,
-        end_pos: int = None
+        chunk_source: str = None,
     ) -> int:
         """
         保存一个chunk
@@ -116,8 +142,7 @@ class ChunkStore:
         Args:
             chunk_text: chunk文本内容
             chunk_index: chunk在原文本中的索引
-            start_pos: 起始位置
-            end_pos: 结束位置
+            chunk_source: 来源文件名（如"1.txt"）
             
         Returns:
             chunk_id
@@ -125,16 +150,45 @@ class ChunkStore:
         cursor = self.conn.cursor()
         
         cursor.execute("""
-            INSERT INTO chunks (chunk_text, chunk_index, start_pos, end_pos)
-            VALUES (?, ?, ?, ?)
-        """, (chunk_text, chunk_index, start_pos, end_pos))
+            INSERT INTO chunks (chunk_text, chunk_index, chunk_source)
+            VALUES (?, ?, ?)
+        """, (chunk_text, chunk_index, chunk_source))
         
         self.conn.commit()
         chunk_id = cursor.lastrowid
         
-        logger.debug(f"保存chunk: chunk_id={chunk_id}, index={chunk_index}, size={len(chunk_text)}")
+        logger.debug(f"保存chunk: chunk_id={chunk_id}, index={chunk_index}, source={chunk_source}, size={len(chunk_text)}")
         
         return chunk_id
+    
+    def get_or_create_chunk(
+        self,
+        chunk_text: str,
+        chunk_index: int,
+        chunk_source: str = None
+    ) -> tuple[int, bool]:
+        """
+        获取或创建chunk：如果相同文件的相同chunk_index已存在，则复用，否则创建
+        
+        Args:
+            chunk_text: chunk文本内容
+            chunk_index: chunk在原文本中的索引
+            chunk_source: 来源文件名（如"1.txt"）
+            
+        Returns:
+            (chunk_id, is_new) - chunk_id和是否为新创建的标志
+        """
+        # 尝试查找已存在的chunk
+        existing_chunk = self.get_chunk_by_source_and_index(chunk_source, chunk_index)
+        
+        if existing_chunk:
+            chunk_id = existing_chunk['chunk_id']
+            logger.debug(f"复用已有chunk: chunk_id={chunk_id}, index={chunk_index}, source={chunk_source}")
+            return chunk_id, False
+        else:
+            # 不存在，创建新chunk
+            chunk_id = self.save_chunk(chunk_text, chunk_index, chunk_source)
+            return chunk_id, True
     
     def save_summaries(
         self, 

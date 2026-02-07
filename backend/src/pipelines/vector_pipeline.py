@@ -92,12 +92,13 @@ class VectorPipeline:
             f"模型: {model}, 批次大小: {self.batch_size}"
         )
     
-    async def process_text(self, text: str) -> Dict[str, Any]:
+    async def process_text(self, text: str, source_file: str = None) -> Dict[str, Any]:
         """
         处理完整文本，构建向量数据库（流式处理：边提取边编码）
         
         Args:
             text: 原始对话文本
+            source_file: 来源文件名（如"1.txt"），用于记录chunk来源
             
         Returns:
             处理结果统计
@@ -139,7 +140,7 @@ class VectorPipeline:
         # CM的信号量会控制实际并发数
         # 每个chunk完成后立即保存+入队，不等其他chunk
         summary_counts = await asyncio.gather(*[
-            self._process_and_queue_chunk(idx, chunk, aliases, summary_queue, len(chunks), vector_count_result)
+            self._process_and_queue_chunk(idx, chunk, aliases, summary_queue, source_file)
             for idx, chunk in enumerate(chunks)
         ])
         
@@ -221,14 +222,13 @@ class VectorPipeline:
         chunk_text: str,
         aliases: Dict[str, List[str]],
         summary_queue: "asyncio.Queue",
-        chunks_total: int,
-        vector_count_result: Dict[str, int]
+        source_file: str = None
     ) -> int:
         """
         生产者：处理单个chunk
-        1. 调用CM提取摘要（CM内部用信号量控制并发数）
-        2. 保存chunk到SQLite
-        3. 保存摘要到SQLite
+        1. 调用LLM提取摘要（每次都提取，充实摘要库）
+        2. 检查chunk是否已存在，存在则复用chunk_id，不存在则创建
+        3. 保存新摘要到SQLite（关联到chunk_id）
         4. 摘要数据放入队列（消费者会立即开始编码）
         
         Args:
@@ -236,20 +236,25 @@ class VectorPipeline:
             chunk_text: chunk文本
             aliases: 别名映射表
             summary_queue: 摘要队列
-            chunks_total: chunks总数
-            vector_count_result: 已编码向量计数（引用传递）
+            source_file: 来源文件名
             
         Returns:
             该chunk提取的摘要数量
         """
-        # 1. 提取摘要（CM内部并发调度）
+        # 1. 提取摘要（CM内部并发调度，每次都提取以充实摘要库）
         summaries = await self.summary_extractor.extract_summaries(chunk_text, aliases)
         
-        # 2. 保存chunk到SQLite
-        chunk_id = self.chunk_store.save_chunk(
+        # 2. 获取或创建chunk（如果文件已处理过，复用chunk_id，不重复写入chunk）
+        chunk_id, is_new = self.chunk_store.get_or_create_chunk(
             chunk_text=chunk_text,
-            chunk_index=chunk_idx
+            chunk_index=chunk_idx,
+            chunk_source=source_file
         )
+        
+        if is_new:
+            logger.debug(f"新chunk {chunk_idx} (文件: {source_file})，chunk_id={chunk_id}，提取了 {len(summaries)} 个摘要")
+        else:
+            logger.debug(f"Chunk {chunk_idx} (文件: {source_file}) 已存在，复用chunk_id={chunk_id}，添加 {len(summaries)} 个新摘要")
         
         # 3. 保存摘要到SQLite + 立即放入编码队列
         summary_count = 0
@@ -311,79 +316,6 @@ class VectorPipeline:
         # 记录映射关系
         for item, vector_id in zip(batch, ids):
             vector_id_mapping[item["summary_id"]] = vector_id
-    
-    async def _encode_and_store_summaries(
-        self, 
-        chunk_summary_mapping: Dict[int, List[int]]
-    ) -> int:
-        """
-        编码摘要并存入ChromaDB
-        
-        Args:
-            chunk_summary_mapping: {chunk_id: [summary_id1, summary_id2, ...]}
-            
-        Returns:
-            成功编码的向量数
-        """
-        vector_count = 0
-        vector_id_mapping = {}  # {summary_id: vector_id}
-        
-        # 收集所有摘要文本
-        all_summary_data = []
-        for chunk_id, summary_ids in chunk_summary_mapping.items():
-            summaries = self.chunk_store.get_summaries_by_chunk(chunk_id)
-            for summary in summaries:
-                all_summary_data.append({
-                    "summary_id": summary["summary_id"],
-                    "chunk_id": summary["chunk_id"],
-                    "text": summary["summary_text"]
-                })
-        
-        if not all_summary_data:
-            logger.warning("没有摘要需要编码")
-            return 0
-        
-        # 批量编码和存储（使用self.batch_size控制批次大小）
-        logger.info(f"使用批次大小 {self.batch_size} 进行向量编码")
-        
-        for i in range(0, len(all_summary_data), self.batch_size):
-            batch = all_summary_data[i:i+self.batch_size]
-            
-            # 准备数据
-            texts = [item["text"] for item in batch]
-            ids = [f"sum_{item['summary_id']}" for item in batch]
-            metadatas = [
-                {
-                    "summary_id": item["summary_id"],
-                    "chunk_id": item["chunk_id"],
-                    "text": item["text"]
-                }
-                for item in batch
-            ]
-            
-            # 添加到ChromaDB
-            self.vector_store.add_documents(
-                documents=texts,
-                ids=ids,
-                metadatas=metadatas
-            )
-            
-            # 记录映射关系
-            for item, vector_id in zip(batch, ids):
-                vector_id_mapping[item["summary_id"]] = vector_id
-            
-            vector_count += len(batch)
-            
-            # 定期垃圾回收
-            if (i + self.batch_size) % 100 == 0:
-                gc.collect()
-                logger.debug(f"编码 {i + self.batch_size}/{len(all_summary_data)} 后执行垃圾回收")
-        
-        # 更新SQLite中的vector_id
-        logger.info("更新SQLite中的vector_id映射...")
-        self.chunk_store.batch_update_vector_ids(vector_id_mapping)
-        
-        return vector_count
     
     def search_similar(
         self, 
