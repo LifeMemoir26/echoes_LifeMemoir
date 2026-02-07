@@ -16,13 +16,14 @@ DEDUP_PROMPT = """你是一位专业的人生传记整理专家。
 1. **语义去重**：识别并合并描述同一事件的多个条目（即使角度不同）
 2. **精准化**：优化"时间补充2"和"简要准确的事件说明"，使其更准确、简洁
 3. **严禁改变**：精准年份、事件类型、其他字段必须保持不变
+4. **合并追踪**：记录哪些事件被合并到一起
 
 【输入数据格式】
 每条事件包含：
+- id: 事件唯一标识符
 - year: 精准年份（如"1990"）
 - time_detail: 时间补充2（如"春季"、"3-5月"、"大学期间"）
 - event_summary: 简要准确的事件说明
-- event_type: 事件类型
 - other fields: 其他字段
 
 【处理要求】
@@ -34,9 +35,13 @@ DEDUP_PROMPT = """你是一位专业的人生传记整理专家。
 - 例3："签署贸易协定" + "与中国达成贸易协议" → 如果同一协定，合并
 
 **第二步：合并重复事件**
-- 保留最早的year
+- 保留你认为最正确的year（如果所有事件的year相同，则保留该year）
 - 合并time_detail（如"春季"+"3月" → "3月/春季"）
 - 整合event_summary为更完整准确的描述（融合多角度信息）
+- **记录合并来源**：
+  * 返回字段`merged_from_ids`：数组，包含所有被合并的原始事件id
+  * 例如：将id为1、5、9的事件合并为一个新事件时，返回`"merged_from_ids": [1, 5, 9]`
+  * 如果事件未被合并（保持原样），返回该事件自己的id，如`"merged_from_ids": [2]`
 - 保留最详细的other fields
 
 **第三步：精准化event_summary**
@@ -54,9 +59,32 @@ DEDUP_PROMPT = """你是一位专业的人生传记整理专家。
 {events_json}
 
 【输出要求】
-返回JSON数组，每个事件包含完整的原始字段，只优化time_detail和event_summary。
-必须保持year、event_type等其他字段不变。
-**重要**：不要返回chunk_source、extracted_at、written_at、created_at等长文本或时间戳字段。
+返回JSON数组，每个事件包含完整的原始字段（包括id），并添加以下字段：
+- **merged_from_ids**：数组，包含组成该事件的原始事件id列表
+  * 如果事件是由id为1、5、9的事件合并而来，则`"merged_from_ids": [1, 5, 9]`
+  * 如果事件未被合并，则返回该事件自己的id，如`"merged_from_ids": [2]`
+  * **注意**：merged_from_ids 数组至少包含一个id
+
+只优化time_detail和event_summary，保持year等其他字段不变。
+**重要**：不要返回chunk_source、extracted_at、written_at、created_at、event_details等长文本或时间戳字段。
+
+**输出格式示例**：
+[
+  {{
+    "id": 1,
+    "year": "1990",
+    "time_detail": "3月/春季",
+    "event_summary": "特朗普修复沃尔曼溜冰场并提前完工",
+    "merged_from_ids": [1, 5, 9]
+  }},
+  {{
+    "id": 2,
+    "year": "1992",
+    "time_detail": "秋季",
+    "event_summary": "特朗普宣布参选总统",
+    "merged_from_ids": [2]
+  }}
+]
 
 **引号使用规则**：事件描述中引用词汇或概念时，只使用中文单引号（'词汇'），严禁使用中文双引号（"词汇"）或英文引号（"word"），以避免与JSON语法冲突。
 
@@ -104,7 +132,7 @@ class EventRefiner:
         cleaned_events = []
         for event in sorted_events:
             cleaned = {k: v for k, v in event.items() 
-                      if k not in ['chunk_source', 'extracted_at', 'written_at', 'created_at']}
+                      if k not in ['chunk_source', 'extracted_at', 'written_at', 'created_at', 'event_details', 'is_merged']}
             cleaned_events.append(cleaned)
         
         events_json = json.dumps(cleaned_events, ensure_ascii=False, indent=2)
@@ -133,6 +161,8 @@ class EventRefiner:
                     raise ValueError("每个事件必须是字典对象")
                 if "year" not in event or "event_summary" not in event:
                     raise ValueError("事件缺少必需字段: year, event_summary")
+                if "merged_from_ids" not in event:
+                    raise ValueError("事件缺少必需字段: merged_from_ids")
             
             logger.info(f"优化完成：{len(events)} → {len(refined_events)} 条事件")
             
