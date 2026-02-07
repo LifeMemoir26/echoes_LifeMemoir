@@ -8,6 +8,8 @@ from typing import List, Dict, Any, Optional
 import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
+from pathlib import Path
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +44,6 @@ class VectorStore:
                 allow_reset=True
             )
         )
-        
-        # 确定本地模型路径
-        from pathlib import Path
-        import time
-        import os
         
         # data/models
         # backend/src/database/vector_store.py -> backend/
@@ -131,7 +128,7 @@ class VectorStore:
         import time
         start_time = time.time()
         
-        # 批量编码（batch_size由VectorPipeline控制，这里直接处理传入的所有文本）
+        # 批量编码
         embeddings = self.encoder.encode(
             texts, 
             show_progress_bar=False,
@@ -321,6 +318,78 @@ class VectorStore:
         logger.warning(f"重置集合: {self.collection_name}")
         self.client.delete_collection(name=self.collection_name)
         self.collection = self._get_or_create_collection()
+    
+    def query_relevant_chunks(
+        self,
+        summaries: List[str],
+        top_k_per_summary: int = 1,
+        similarity_threshold: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        为每条总结查询相关的历史chunks
+        
+        Args:
+            summaries: 总结文本列表
+            top_k_per_summary: 每条总结返回的最相关chunk数量
+            similarity_threshold: 相似度阈值（0-1）
+        
+        Returns:
+            相关chunks列表，每个chunk包含：
+            - query_summary: 查询的总结文本
+            - matched_content: 匹配的文档内容
+            - similarity: 相似度分数（0-1）
+            - metadata: 元数据
+        """
+        if not summaries:
+            logger.warning("No summaries provided for querying")
+            return []
+        
+        relevant_chunks = []
+        
+        try:
+            # 批量编码总结
+            logger.debug(f"Encoding {len(summaries)} summaries for query")
+            summary_embeddings = self.encode_batch(summaries)
+            
+            # 为每个总结查询最相似的chunks
+            for summary, embedding in zip(summaries, summary_embeddings):
+                # 使用embedding搜索
+                results = self.query(
+                    query_embeddings=[embedding],
+                    n_results=top_k_per_summary
+                )
+                
+                # 处理查询结果
+                if results["ids"] and len(results["ids"][0]) > 0:
+                    for i in range(len(results["ids"][0])):
+                        distance = results["distances"][0][i]
+                        # ChromaDB使用L2距离，转换为相似度 (0-1，越接近1越相似)
+                        similarity = 1.0 / (1.0 + distance)
+                        
+                        # 检查相似度阈值
+                        if similarity >= similarity_threshold:
+                            relevant_chunks.append({
+                                "query_summary": summary,
+                                "matched_content": results["documents"][0][i],
+                                "similarity": similarity,
+                                "metadata": results["metadatas"][0][i] if results["metadatas"] else {}
+                            })
+                            
+                            logger.debug(
+                                f"Summary '{summary[:30]}...' matched with "
+                                f"similarity {similarity:.3f}"
+                            )
+            
+            logger.info(
+                f"Query completed: {len(summaries)} summaries -> "
+                f"{len(relevant_chunks)} relevant chunks (threshold={similarity_threshold})"
+            )
+            
+            return relevant_chunks
+            
+        except Exception as e:
+            logger.error(f"Failed to query relevant chunks: {e}")
+            return []
     
     def close(self):
         """关闭向量存储（清理资源）"""
