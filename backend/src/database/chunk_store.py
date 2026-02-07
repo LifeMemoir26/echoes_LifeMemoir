@@ -337,6 +337,31 @@ class ChunkStore:
             return dict(row)
         return None
     
+    def get_random_chunks(self, count: int) -> List[Dict[str, Any]]:
+        """
+        从chunks表中随机选取指定数量的chunks
+        
+        Args:
+            count: 要选取的chunks数量
+            
+        Returns:
+            随机选取的chunk字典列表
+        """
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            SELECT * FROM chunks
+            ORDER BY RANDOM()
+            LIMIT ?
+        """, (count,))
+        
+        rows = cursor.fetchall()
+        chunks = [dict(row) for row in rows]
+        
+        logger.debug(f"随机选取chunks: 请求数量={count}, 实际返回={len(chunks)}")
+        
+        return chunks
+    
     def get_stats(self) -> Dict[str, int]:
         """
         获取存储统计信息
