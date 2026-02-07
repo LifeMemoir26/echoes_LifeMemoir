@@ -7,6 +7,7 @@ from typing import Dict, Any
 from ...database.sqlite_client import SQLiteClient
 from .event_refiner import EventRefiner
 from .uncertain_event_refiner import UncertainEventRefiner
+from .event_details_refiner import EventDetailsRefiner
 from .character_profile_refiner import CharacterProfileRefiner
 from ...llm.concurrency_manager import ConcurrencyManager
 
@@ -27,6 +28,7 @@ class RefinementPipeline:
         self.db_client = db_client
         self.event_refiner = EventRefiner(concurrency_manager)
         self.uncertain_refiner = UncertainEventRefiner(concurrency_manager)
+        self.details_refiner = EventDetailsRefiner(concurrency_manager)
         self.profile_refiner = CharacterProfileRefiner(concurrency_manager)
         
     async def refine_all(self) -> Dict[str, Any]:
@@ -184,6 +186,39 @@ class RefinementPipeline:
         stats["events_after"] = len(all_refined_events)
         
         logger.info(f"准备写回 {len(all_refined_events)} 条优化后的事件（结果2）")
+        
+        # 在写入前，统一处理 event_details 拼接和 is_merged 设置
+        logger.info("开始处理 event_details 拼接和 is_merged 标记...")
+        
+        # 从数据库读取所有原始事件的 id -> event_details 映射
+        all_original_events = self.db_client.get_all_events()
+        id_to_details = {e.get('id'): e.get('event_details', '') for e in all_original_events}
+        
+        for event in all_refined_events:
+            merged_ids = event.get('merged_from_ids', [])
+            
+            # 拼接 event_details
+            details_parts = []
+            for event_id in merged_ids:
+                detail = id_to_details.get(event_id, '')
+                if detail:
+                    details_parts.append(detail)
+            
+            event['event_details'] = '\n---\n'.join(details_parts) if details_parts else ''
+            
+            # 设置 is_merged
+            event['is_merged'] = len(merged_ids) > 1
+        
+        merged_count = sum(1 for e in all_refined_events if e.get('is_merged'))
+        logger.info(f"完成拼接：共 {merged_count} 条合并事件")
+        
+        # 对合并事件的 event_details 进行AI总结
+        if merged_count > 0:
+            logger.info(f"开始对 {merged_count} 条合并事件的event_details进行AI总结...")
+            all_refined_events = await self.details_refiner.refine_merged_event_details(
+                all_refined_events
+            )
+            logger.info("event_details总结完成")
         
         # 清空原有事件
         self.db_client.clear_events()

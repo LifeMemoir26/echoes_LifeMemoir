@@ -181,7 +181,9 @@ async def main():
     print(f"  步骤: 分块 → 加载别名 → 提取摘要 → 存储 → 向量编码")
     
     try:
-        vec_stats = await vector_pipeline.process_text(dialogue)
+        # 传递文件名作为chunk来源
+        source_filename = input_file.name  # "1.txt"
+        vec_stats = await vector_pipeline.process_text(dialogue, source_file=source_filename)
         
         stage2_time = time.time() - stage2_start
         

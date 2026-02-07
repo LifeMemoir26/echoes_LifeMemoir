@@ -69,6 +69,8 @@ class SQLiteClient:
                 year TEXT NOT NULL,
                 time_detail TEXT,
                 event_summary TEXT NOT NULL,
+                event_details TEXT,
+                is_merged BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -121,12 +123,14 @@ class SQLiteClient:
         for event in events:
             cursor.execute("""
                 INSERT OR REPLACE INTO life_events 
-                (year, time_detail, event_summary)
-                VALUES (?, ?, ?)
+                (year, time_detail, event_summary, event_details, is_merged)
+                VALUES (?, ?, ?, ?, ?)
             """, (
                 event.get('year'),
                 event.get('time_detail'),
-                event.get('event_summary')
+                event.get('event_summary'),
+                event.get('event_details', ''),
+                event.get('is_merged', False)
             ))
             count += 1
         
@@ -319,7 +323,7 @@ class SQLiteClient:
             
             cursor.execute("""
                 UPDATE aliases 
-                SET alias_names = ?, updated_at = CURRENT_TIMESTAMP
+                SET alias_names = ?
                 WHERE main_name = ?
             """, (merged_aliases_str, main_name))
             logger.debug(f"更新别名: {main_name} -> {merged_aliases_str}")

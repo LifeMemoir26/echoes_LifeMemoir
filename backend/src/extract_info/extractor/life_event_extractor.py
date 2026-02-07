@@ -38,12 +38,14 @@ class LifeEventExtractor:
   {
     "year": "1985",
     "time_detail": "春季",
-    "event_summary": "叙述者从北京大学中文系毕业"
+    "event_summary": "叙述者从北京大学中文系毕业",
+    "event_details": "叙述者在1985年春季从北京大学中文系毕业，获得文学学士学位。毕业典礼在5月举行，有300多名学生参加。毕业后他收到了多个工作邀请。"
   },
   {
     "year": "9999",
     "time_detail": "1990年到1995年",
-    "event_summary": "叙述者在上海人民出版社工作出任编辑"
+    "event_summary": "叙述者在上海人民出版社工作出任编辑",
+    "event_details": "叙述者在上海人民出版社担任编辑，负责文学类图书的审稿和编辑工作。期间参与编辑了多本畅销书籍。"
   }
 ]
 
@@ -84,7 +86,20 @@ class LifeEventExtractor:
    - 客观描述，不加主观评价
    - **只提取{narrator_name}本人的人生事件**，不要提取他人的事件
 
-3. 只提取确实发生的重要事件，不要提取：
+3. **详细描述（event_details）**：
+   - **从叙述者视角出发**，根据对话内容详细记录事件，越详细越好但**不超过300字**
+   - 如果文本信息丰富，尽可能详细记录：
+     * 时间细节（具体日期、时长、背景时间、叙述者提及的时间线索）
+     * 地点细节（具体地点、场所、地理位置、叙述者对场景的描述）
+     * 人物细节（参与者、相关人物、角色关系、叙述者对人物的描述）
+     * 过程细节（事件经过、关键步骤、因果关系、叙述者回忆的过程）
+     * 结果细节（事件结果、影响、后续发展、叙述者的感受或观察）
+   - 如果文本信息较少，量力而行总结文本中的有效信息即可
+   - **尊重叙述者视角**：按照叙述者在对话中的表述方式记录，保留叙述者的语气和视角
+   - **引用对话原文**：优先引用对话中叙述者的原话和关键描述（用中文单引号）
+   - **详实记录**：对话中提到的具体细节都应该记录，不省略重要信息
+
+4. 只提取确实发生的重要事件，不要提取：
    - 日常琐事
    - 情绪描述
    - 观点看法
@@ -171,8 +186,9 @@ class LifeEventExtractor:
         - year: 字符串
         - time_detail: 字符串
         - event_summary: 字符串
+        - event_details: 字符串
         """
-        required_fields = ['year', 'time_detail', 'event_summary']
+        required_fields = ['year', 'time_detail', 'event_summary', 'event_details']
         
         for field in required_fields:
             if field not in event:
@@ -188,5 +204,11 @@ class LifeEventExtractor:
         if not (year.isdigit() and len(year) == 4):
             logger.warning(f"年份格式错误: {year}")
             return False
+        
+        # 验证event_details长度（不超过300字）
+        event_details = event['event_details']
+        if len(event_details) > 300:
+            logger.warning(f"event_details超过300字限制: {len(event_details)}字")
+            # 不返回False，只是警告，因为AI可能略微超出
         
         return True

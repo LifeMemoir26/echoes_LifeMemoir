@@ -16,6 +16,7 @@ INFER_PROMPT = """你是一位专业的人生传记整理专家。
 1. **推测精准年份**：根据上下文时间线索推断可能的年份
 2. **完善时间补充**：如无法确定年份，完善time_detail提供更多时间线索
 3. **去重精准化**：合并重复事件，优化事件说明
+4. **合并追踪**：记录哪些事件被合并到一起
 
 【已知的精准年份事件上下文】
 {context_events_json}
@@ -43,6 +44,10 @@ INFER_PROMPT = """你是一位专业的人生传记整理专家。
      * 例如："特朗普在新加坡与金正恩会面" 出现3次 → 只保留1条
      * 例如："特朗普与彭斯就选举结果认证问题发生分歧" + "特朗普与彭斯就选举结果认证问题进行对话" → 合并为一条
    - 合并时选择最完整、最准确的event_summary和time_detail
+   - **记录合并来源**：
+     * 返回字段`merged_from_ids`：数组，包含所有被合并的原始事件id
+     * 例如：将id为3、7的事件合并时，返回`"merged_from_ids": [3, 7]`
+     * 如果事件未被合并（保持原样），返回该事件自己的id，如`"merged_from_ids": [4]`
    - 优化event_summary（保持主语明确）
    - 保持其他字段不变
 
@@ -51,9 +56,32 @@ INFER_PROMPT = """你是一位专业的人生传记整理专家。
    - **严格去重**：确保同一年份的同一件事只出现一次
    - 如推测出年份，将year改为具体年份（如"1992"）
    - 如无法推测，保持year="9999"但完善time_detail
-   - 所有事件必须包含完整的原始字段
+   - 所有事件必须包含完整的原始字段（包括id）
+   - **添加合并来源字段**：
+     * `merged_from_ids`：数组，包含组成该事件的原始事件id列表
+     * 如果事件是合并而来，包含所有被合并的id，如`"merged_from_ids": [3, 7, 11]`
+     * 如果事件未被合并，返回该事件自己的id，如`"merged_from_ids": [4]`
+     * **注意**：merged_from_ids 数组至少包含一个id
    - 按year排序输出（9999放在最后）
-   - **重要**：不要返回chunk_source、extracted_at、written_at、created_at等长文本或时间戳字段
+   - **重要**：不要返回chunk_source、extracted_at、written_at、created_at、event_details等长文本或时间戳字段
+
+**输出格式示例**：
+[
+  {{
+    "id": 1,
+    "year": "1990",
+    "time_detail": "春季",
+    "event_summary": "特朗普完成某项目",
+    "merged_from_ids": [1, 5]
+  }},
+  {{
+    "id": 2,
+    "year": "9999",
+    "time_detail": "1990-1995年间",
+    "event_summary": "特朗普某活动",
+    "merged_from_ids": [2]
+  }}
+]
 
 **引号使用规则**：事件描述中引用词汇或概念时，只使用中文单引号（'词汇'），严禁使用中文双引号（"词汇"）或英文引号（"word"），以避免与JSON语法冲突。
 
@@ -104,13 +132,13 @@ class UncertainEventRefiner:
         cleaned_uncertain = []
         for event in uncertain_events:
             cleaned = {k: v for k, v in event.items() 
-                      if k not in ['chunk_source', 'extracted_at', 'written_at', 'created_at']}
+                      if k not in ['chunk_source', 'extracted_at', 'written_at', 'created_at', 'event_details', 'is_merged']}
             cleaned_uncertain.append(cleaned)
         
         cleaned_context = []
         for event in context_events:
             cleaned = {k: v for k, v in event.items() 
-                      if k not in ['chunk_source', 'extracted_at', 'written_at', 'created_at']}
+                      if k not in ['chunk_source', 'extracted_at', 'written_at', 'created_at', 'event_details', 'is_merged']}
             cleaned_context.append(cleaned)
         
         uncertain_json = json.dumps(cleaned_uncertain, ensure_ascii=False, indent=2)
@@ -142,6 +170,8 @@ class UncertainEventRefiner:
                     raise ValueError("每个事件必须是字典对象")
                 if "year" not in event or "event_summary" not in event:
                     raise ValueError("事件缺少必需字段: year, event_summary")
+                if "merged_from_ids" not in event:
+                    raise ValueError("事件缺少必需字段: merged_from_ids")
             
             # 统计年份推测情况
             inferred_count = sum(1 for e in refined_events if e.get("year") != "9999")
