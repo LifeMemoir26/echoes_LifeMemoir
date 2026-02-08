@@ -289,6 +289,38 @@ class ChunkStore:
             return dict(row)
         return None
     
+    def get_chunks_batch(self, chunk_ids: List[int]) -> Dict[int, str]:
+        """
+        批量获取chunk文本
+        
+        Args:
+            chunk_ids: chunk ID列表
+            
+        Returns:
+            {chunk_id: chunk_text}映射字典
+        """
+        if not chunk_ids:
+            return {}
+        
+        cursor = self.conn.cursor()
+        
+        # 构建 IN 查询（一次性查询所有chunk）
+        placeholders = ','.join('?' * len(chunk_ids))
+        query_sql = f"""
+            SELECT chunk_id, chunk_text 
+            FROM chunks 
+            WHERE chunk_id IN ({placeholders})
+        """
+        
+        cursor.execute(query_sql, chunk_ids)
+        
+        # 构建映射字典
+        chunk_map = {row['chunk_id']: row['chunk_text'] for row in cursor.fetchall()}
+        
+        logger.debug(f"批量查询chunks: 请求{len(chunk_ids)}个, 返回{len(chunk_map)}个")
+        
+        return chunk_map
+    
     def get_summaries_by_chunk(self, chunk_id: int) -> List[Dict[str, Any]]:
         """
         获取chunk的所有摘要
@@ -361,6 +393,31 @@ class ChunkStore:
         logger.debug(f"随机选取chunks: 请求数量={count}, 实际返回={len(chunks)}")
         
         return chunks
+    
+    def get_random_summaries(self, count: int) -> List[str]:
+        """
+        从summaries表中随机选取指定数量的摘要文本
+        
+        Args:
+            count: 要选取的摘要数量
+            
+        Returns:
+            随机选取的摘要文本列表
+        """
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            SELECT summary_text FROM summaries
+            ORDER BY RANDOM()
+            LIMIT ?
+        """, (count,))
+        
+        rows = cursor.fetchall()
+        summaries = [row['summary_text'] for row in rows]
+        
+        logger.debug(f"随机选取summaries: 请求数量={count}, 实际返回={len(summaries)}")
+        
+        return summaries
     
     def get_stats(self) -> Dict[str, int]:
         """
