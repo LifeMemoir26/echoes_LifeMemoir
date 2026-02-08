@@ -139,3 +139,5 @@ class TmpStorage:
     def __str__(self) -> str:
         """字符串表示"""
         return f"TmpStorage(chars={self._chars_count}/{self.threshold}, turns={len(self._storage)})"
+
+# okk！

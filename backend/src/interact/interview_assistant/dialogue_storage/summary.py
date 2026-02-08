@@ -1,9 +1,9 @@
 """
 会话总结管理器
-管理提取的会话总结信息
+只存储最近一次的会话总结信息
 """
 import asyncio
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,53 +13,96 @@ class SummaryManager:
     """
     会话总结管理器
     
-    管理会话中提取的总结信息：
-    - 结构化存储：(importance, summary)
+    只存储最近一次的总结：
+    - 结构化存储：List[(importance, summary)]
     - 异步操作支持
     - 线程安全（asyncio.Lock）
-    - 支持批量操作
-    - 支持浓缩操作
+    - 每次设置会替换之前的总结
     """
     
     def __init__(self):
         """初始化总结管理器"""
-        self._summaries: List[Tuple[int, str]] = []  # [(importance, summary), ...]
+        self._latest_summaries: List[Tuple[int, str]] = []  # 最近一次的总结列表
         self._lock = asyncio.Lock()
         
         logger.info("SummaryManager initialized")
     
-    async def add(self, importance: int, summary: str):
+    async def set(self, summaries: List[Tuple[int, str]]):
         """
-        添加一条总结
-        
-        Args:
-            importance: 重要性（1-5）
-            summary: 总结文本
-        """
-        async with self._lock:
-            self._summaries.append((importance, summary))
-            logger.debug(f"Added summary with importance {importance}, total: {len(self._summaries)}")
-    
-    async def add_batch(self, summaries: List[Tuple[int, str]]):
-        """
-        批量添加总结
+        设置最新的总结（替换之前的）
         
         Args:
             summaries: 总结列表，每项为 (importance, summary) 元组
         """
         async with self._lock:
-            self._summaries.extend(summaries)
-            logger.debug(f"Added {len(summaries)} summaries, total: {len(self._summaries)}")
+            self._latest_summaries = summaries.copy()
+            logger.debug(f"Set latest summaries: {len(summaries)} items")
     
-    async def get_all(self) -> List[Tuple[int, str]]:
+    async def get(self) -> List[Tuple[int, str]]:
         """
-        获取所有总结（结构化格式）
+        获取最新的总结（结构化格式）
         
         Returns:
             总结列表的副本，每项为 (importance, summary) 元组
         """
         async with self._lock:
-            return self._summaries.copy()
+            return self._latest_summaries.copy()
+    
+    async def get_formatted(self) -> List[str]:
+        """
+        获取格式化的总结字符串
+        
+        Returns:
+            格式化的总结列表："（重要性：X）摘要"
+        """
+        async with self._lock:
+            return self._format_summaries(self._latest_summaries)
+    
+    async def put_and_set(
+        self, 
+        new_summaries: List[Tuple[int, str]]
+    ) -> Tuple[List[str], List[str]]:
+        """
+        设置新总结并返回旧总结和新总结的格式化版本
+        
+        工作流程：
+        1. 格式化提取存储中已有的总结
+        2. 刷新总结存储器，存下新输入的总结
+        3. 格式化提取存储中新的总结
+        4. 返回这两个格式化的总结
+        
+        Args:
+            new_summaries: 新的总结列表，每项为 (importance, summary) 元组
+        
+        Returns:
+            (旧总结格式化列表, 新总结格式化列表)
+        """
+        async with self._lock:
+            # 1. 格式化提取存储中已有的总结
+            old_formatted = self._format_summaries(self._latest_summaries)
+            
+            # 2. 刷新总结存储器，存下新输入的总结
+            self._latest_summaries = new_summaries.copy()
+            logger.debug(f"Updated summaries: {len(new_summaries)} items")
+            
+            # 3. 格式化提取存储中新的总结
+            new_formatted = self._format_summaries(self._latest_summaries)
+            
+            # 4. 返回这两个格式化的总结
+            return old_formatted, new_formatted
+    
+    @staticmethod
+    def _format_summaries(summaries: List[Tuple[int, str]]) -> List[str]:
+        """
+        将 (importance, summary) 元组列表格式化为字符串列表
+        
+        Args:
+            summaries: 总结列表，每项为 (importance, summary) 元组
+        
+        Returns:
+            格式化的总结列表："（重要性：X）摘要"
+        """
+        return [f"（重要性：{imp}）{summary}" for imp, summary in summaries]
     
     @staticmethod
     def format_event_summaries(summaries) -> List[str]:
@@ -82,26 +125,26 @@ class SummaryManager:
             总结数量
         """
         async with self._lock:
-            return len(self._summaries)
-    
-    async def replace(self, new_summaries: List[Tuple[int, str]]):
-        """
-        替换所有总结（用于浓缩操作）
-        
-        Args:
-            new_summaries: 新的总结列表，每项为 (importance, summary) 元组
-        """
-        async with self._lock:
-            old_count = len(self._summaries)
-            self._summaries = new_summaries.copy()
-            logger.info(f"Replaced summaries: {old_count} -> {len(self._summaries)}")
+            return len(self._latest_summaries)
     
     async def clear(self):
-        """清空所有总结"""
+        """清空总结"""
         async with self._lock:
-            self._summaries.clear()
-            logger.info("Cleared all summaries")
+            self._latest_summaries.clear()
+            logger.info("Cleared latest summaries")
+    
+    async def has_summaries(self) -> bool:
+        """
+        检查是否有总结
+        
+        Returns:
+            是否有总结
+        """
+        async with self._lock:
+            return len(self._latest_summaries) > 0
     
     def __str__(self) -> str:
         """字符串表示"""
-        return f"SummaryManager(count={len(self._summaries)})"
+        return f"SummaryManager(count={len(self._latest_summaries)})"
+
+# okk！
