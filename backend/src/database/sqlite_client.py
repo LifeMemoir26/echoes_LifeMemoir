@@ -249,6 +249,32 @@ class SQLiteClient:
         
         return merged
     
+    def get_character_profile_text(self) -> str:
+        """
+        获取格式化的人物侧写文本
+        
+        Returns:
+            格式化的人物侧写文本字符串
+        """
+        profile = self.get_character_profile()
+        
+        if not profile:
+            return "暂无人物侧写信息"
+        
+        # 格式化为可读文本
+        parts = []
+        
+        if profile.get('personality'):
+            parts.append(f"**性格特征**：\n{profile['personality']}")
+        
+        if profile.get('worldview'):
+            parts.append(f"**世界观/价值观**：\n{profile['worldview']}")
+        
+        if not parts:
+            return "暂无人物侧写信息"
+        
+        return "\n\n".join(parts)
+    
     def clear_events(self):
         """清空所有事件数据"""
         cursor = self.conn.cursor()

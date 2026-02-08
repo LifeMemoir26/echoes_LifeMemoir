@@ -105,11 +105,38 @@ class ExtractionConfig(BaseSettings):
         env_prefix = "EXTRACTION_"
 
 
+class InterviewAssistanceConfig(BaseSettings):
+    """采访辅助配置"""
+    # 对话队列配置
+    dialogue_queue_size: int = Field(default=5, description="对话队列容量（轮数）")
+    
+    # 存储缓冲区配置
+    storage_threshold: int = Field(default=400, description="存储缓冲区字符数阈值")
+    
+    # 总结提取配置
+    summary_count: int = Field(default=16, description="每次提取的总结条数")
+    
+    # 向量相似度阈值
+    similarity_threshold: float = Field(default=0.5, description="与临时总结的向量库向量匹配相似度保留阈值")
+    
+    # 背景信息生成配置
+    max_context_summaries: int = Field(default=50, description="用于生成背景信息的最大历史总结数")
+    
+    # 待探索事件初始化配置
+    event_extraction_similarity_threshold: float = Field(default=0.3, description="初始化从数据库提取低相似度人生事件时的相似度阈值")
+    pending_event_from_db: int = Field(default=16, description="从数据库事件中提取的待探索事件数量")
+    pending_event: int = Field(default=32, description="从chunks中AI分析提取的待探索事件数量")
+    
+    class Config:
+        env_prefix = "INTERVIEW_"
+
+
 class KnowledgeExtractionSettings(BaseSettings):
     """知识提取模块总配置"""
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    interview: InterviewAssistanceConfig = Field(default_factory=InterviewAssistanceConfig)
     
     # 调试模式
     debug: bool = Field(default=False, description="调试模式")
