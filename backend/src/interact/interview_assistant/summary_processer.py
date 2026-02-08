@@ -1,6 +1,6 @@
 """
 总结处理器
-负责提取和浓缩会话总结
+负责从对话文本块中提取结构化的事件总结
 """
 import logging
 from typing import List, Optional
@@ -33,9 +33,7 @@ class SummaryProcesser:
     """
     总结处理器
     
-    负责：
-    1. 从对话文本块中提取结构化的事件总结
-    2. 将大量总结浓缩为精华，模拟人类短期记忆机制
+    负责从对话文本块中提取结构化的事件总结
     """
     
     def __init__(
@@ -58,11 +56,10 @@ class SummaryProcesser:
         self.config = config
         
         self.summary_count = config.summary_count
-        self.condensed_ratio = config.condensed_ratio
         
         logger.info(
             f"SummaryProcesser initialized: "
-            f"summary_count={self.summary_count}, condensed_ratio={self.condensed_ratio}"
+            f"summary_count={self.summary_count}"
         )
     
     async def extract(self, chunk: TextChunk) -> List[EventSummary]:
@@ -150,122 +147,4 @@ class SummaryProcesser:
             logger.error(f"Failed to extract summaries: {e}")
             raise
     
-    async def condense(
-        self,
-        summaries: List[EventSummary],
-        target_count: int = None
-    ) -> List[EventSummary]:
-        """
-        浓缩总结列表
-        
-        Args:
-            summaries: 原始总结列表（EventSummary对象）
-            target_count: 目标数量，如果不指定则按比例计算
-        
-        Returns:
-            浓缩后的总结列表（EventSummary对象）
-        """
-        if not summaries:
-            logger.warning("No summaries to condense")
-            return []
-        
-        # 计算目标数量
-        if target_count is None:
-            target_count = max(1, int(len(summaries) * self.condensed_ratio))
-        
-        current_count = len(summaries)
-        
-        logger.info(
-            f"Condensing summaries: {current_count} -> {target_count} "
-            f"(ratio={self.condensed_ratio})"
-        )
-        
-        # 如果已经小于等于目标数量，直接返回
-        if current_count <= target_count:
-            logger.info("Already within target count, no condensation needed")
-            return summaries
-        
-        # 构建系统提示词
-        system_prompt = """你是一个专业的信息浓缩专家，擅长提取和保留关键信息。
-你的任务是将大量总结浓缩为精华，模拟人类的短期记忆机制。
-
-返回格式：
-{
-  "condensed_summaries": [
-    {
-      "summary": "浓缩后的总结",
-      "importance": 整数（1-5）
-    }
-  ]
-}
-
-浓缩要求：
-1. **保留关键信息**：优先保留重要性高的信息（重要性4或5的事件）
-2. **保留独特性**：保留最独特、最有特色的细节
-3. **合并相似内容**：将相似或重复的信息合并为一条
-4. **删除冗余**：删除次要、重复、价值较低的信息
-5. **保持完整性**：浓缩后的总结应该是完整的、可独立理解的
-6. **数量控制**：严格控制在目标数量内
-7. **重要性调整**：合并后的总结重要性应取最高值"""
-        
-        # 格式化总结
-        formatted_summaries = SummaryManager.format_event_summaries(summaries)
-        all_summaries_text = "\n".join(formatted_summaries)
-        
-        user_prompt = f"""请将以下 {current_count} 条总结浓缩为最多 {target_count} 条关键信息。
-
-原始总结列表：
-{all_summaries_text}
-
-**浓缩指引**：
-- 优先保留标注了"重要性:4"或"重要性:5"的总结
-- 合并描述同一事件或相似主题的总结
-- 删除过于琐碎或重复的信息
-- 确保浓缩后的总结覆盖不同方面和维度
-- 合并后的重要性取被合并总结中的最高值
-
-要求浓缩后不超过 {target_count} 条，以JSON格式返回。"""
-        
-        try:
-            # 调用LLM浓缩
-            result = await self.concurrency_manager.generate_structured(
-                prompt=user_prompt,
-                system_prompt=system_prompt,
-                model=None,
-                temperature=0.3  # 较低温度保证稳定性
-            )
-            
-            # 获取浓缩后的总结
-            condensed_data = result.get("condensed_summaries", [])
-            condensed = [EventSummary(**s) for s in condensed_data]
-            
-            if not condensed:
-                logger.error("Condensation returned empty list")
-                # 降级方案：按重要性和时间排序，保留前N条
-                sorted_summaries = sorted(
-                    summaries, 
-                    key=lambda x: x.importance, 
-                    reverse=True
-                )
-                return sorted_summaries[:target_count]
-            
-            # 确保不超过目标数量
-            condensed = condensed[:target_count]
-            
-            logger.info(
-                f"Condensation completed: {current_count} -> {len(condensed)} summaries"
-            )
-            
-            return condensed
-            
-        except Exception as e:
-            logger.error(f"Failed to condense summaries: {e}")
-            # 发生错误时，按重要性排序后截断
-            logger.warning(f"Fallback: sorting by importance and truncating to {target_count}")
-            sorted_summaries = sorted(
-                summaries, 
-                key=lambda x: x.importance, 
-                reverse=True
-            )
-            return sorted_summaries[:target_count]
     
