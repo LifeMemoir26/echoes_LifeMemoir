@@ -9,8 +9,8 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.pipelines.generation_pipeline import GenerationTimelinePipeline
-from src.llm.concurrency_manager import get_concurrency_manager
+from src.services.generate import GenerationTimelineService
+from src.infrastructure.llm.concurrency_manager import get_concurrency_manager
 
 # 配置日志
 logging.basicConfig(
@@ -58,15 +58,15 @@ async def main():
         # 获取全局并发管理器
         concurrency_manager = get_concurrency_manager()
         
-        # 创建时间轴生成Pipeline
-        pipeline = GenerationTimelinePipeline(
+        # 初始化时间轴生成服务
+        service = GenerationTimelineService(
             username=username,
             concurrency_manager=concurrency_manager,
             verbose=True
         )
         
         # 生成时间轴
-        timeline = await pipeline.generate_timeline(
+        timeline = await service.generate_timeline(
             ratio=ratio,
             language_sample_count=10,
             user_preferences=user_preferences
@@ -90,12 +90,12 @@ async def main():
                 print(f"\n...（共{len(timeline)}条记录，仅显示前3条）\n")
             
             # 保存到文件
-            txt_path, json_path = pipeline.save_timeline(timeline)
+            txt_path, json_path = service.save_timeline(timeline)
         else:
             print("\n❌ 时间轴生成失败")
         
         # 关闭Pipeline
-        pipeline.close()
+        service.close()
         
     except Exception as e:
         logger.error(f"时间轴生成失败: {e}", exc_info=True)

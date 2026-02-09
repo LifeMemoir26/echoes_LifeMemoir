@@ -9,8 +9,8 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.pipelines.generation_pipeline import GenerationMemoirPipeline
-from src.llm.concurrency_manager import get_concurrency_manager
+from src.services.generate import GenerationMemoirService
+from src.infrastructure.llm.concurrency_manager import get_concurrency_manager
 
 # 配置日志
 logging.basicConfig(
@@ -59,15 +59,15 @@ async def main():
         # 获取全局并发管理器
         concurrency_manager = get_concurrency_manager()
         
-        # 创建回忆录生成Pipeline
-        pipeline = GenerationMemoirPipeline(
+        # 初始化回忆录生成服务
+        service = GenerationMemoirService(
             username=username,
             concurrency_manager=concurrency_manager,
             verbose=True
         )
         
         # 生成回忆录
-        memoir = await pipeline.generate_memoir(
+        memoir = await service.generate_memoir(
             target_length=target_length,
             language_sample_count=20,
             user_preferences=user_preferences
@@ -82,12 +82,12 @@ async def main():
                 print(f"\n...（共{len(memoir)}字，仅显示前500字）\n")
             
             # 保存到文件
-            txt_path, json_path = pipeline.save_memoir(memoir)
+            txt_path, json_path = service.save_memoir(memoir)
         else:
             print("\n❌ 回忆录生成失败")
         
         # 关闭Pipeline
-        pipeline.close()
+        service.close()
         
     except Exception as e:
         logger.error(f"回忆录生成失败: {e}", exc_info=True)

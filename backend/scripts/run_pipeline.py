@@ -32,10 +32,10 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.pipelines.extraction_pipeline import ExtractionPipeline
-from src.pipelines.vector_pipeline import VectorPipeline
-from src.llm.concurrency_manager import get_concurrency_manager
-from src.config import get_settings
+from src.services.knowledge_service import KnowledgeService
+from src.services.vector_service import VectorService
+from src.infrastructure.llm.concurrency_manager import get_concurrency_manager
+from src.core.config import get_settings
 
 
 async def main():

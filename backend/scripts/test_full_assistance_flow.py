@@ -11,9 +11,9 @@ backend_root = Path(__file__).parent.parent
 project_root = backend_root.parent
 sys.path.insert(0, str(backend_root))
 
-from src.config import get_settings
-from src.llm.concurrency_manager import ConcurrencyManager
-from src.pipelines.assistance_pipeline import AssistancePipeline
+from src.core.config import get_settings
+from src.infrastructure.llm.concurrency_manager import ConcurrencyManager
+from backend.src.services.passive_interview_assistant_service import InterviewService
 import logging
 
 # 配置日志
