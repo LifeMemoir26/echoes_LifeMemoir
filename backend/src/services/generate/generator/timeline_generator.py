@@ -65,7 +65,9 @@ class TimelineGenerator:
         if user_preferences:
             base_criteria += f"\n\n【用户特别关注】\n{user_preferences}"
         
-        system_prompt = f"""你是一位专业的人生故事编辑，擅长从众多事件中筛选出最有意义、最能代表一个人人生轨迹的关键事件。
+        system_prompt = f"""【select_significant_events】
+
+你是一位专业的人生故事编辑，擅长从众多事件中筛选出最有意义、最能代表一个人人生轨迹的关键事件。
 
 {base_criteria}
 
@@ -156,7 +158,9 @@ class TimelineGenerator:
         if user_preferences:
             base_instruction += f"\n\n【用户偏好】\n请在生成时特别注意：{user_preferences}"
         
-        system_prompt = f"""你是一位专业的传记作家，擅长将人生事件转化为生动的时间轴记录。
+        system_prompt = f"""【generate_timeline_entries】
+
+你是一位专业的传记作家，擅长将人生事件转化为生动的时间轴记录。
 
 {base_instruction}
 

@@ -78,7 +78,9 @@ class SummaryProcesser:
         )
         
         # 构建系统提示词
-        system_prompt = """你是一个专业的采访对话提炼分析专家。
+        system_prompt = """【extract_dialogue_summaries】
+
+你是一个专业的采访对话提炼分析专家。
 你的任务是从采访对话中提取关键信息点，形成详细、全面的总结。
 
 **重要性评分标准**：

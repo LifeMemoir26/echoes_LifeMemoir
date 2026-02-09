@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from ....core.paths import get_log_root
 from datetime import datetime 
 import httpx
+from datetime import datetime
+import re
+from ...utils.ai_call_registry import get_call_location
 
 from ....core.config import get_settings, LLMConfig
 
@@ -217,40 +220,25 @@ class AsyncQiniuAIClient:
                 self.__class__._call_counter += 1
                 call_id = self.__class__._call_counter
             
-            from datetime import datetime
+
+            
             timestamp = datetime.now().strftime("%H%M%S")
             
-            # 从 prompt 内容判断提取器类型
+            # 从系统提示词开头提取【XXX】标记
             extractor_name = "unknown"
-            prompt_content = ""
+            
             for msg in messages:
                 content = msg.get("content", "")
-                prompt_content += content + " "
+                
+                # 尝试从系统提示词开头提取【XXX】标记
+                if msg.get("role") == "system":
+                    match = re.match(r'^【(.+?)】', content)
+                    if match:
+                        extractor_name = match.group(1)
+                        break
             
-            # 按照各提取器的特征词精确判断
-            if "人生传记分析师" in prompt_content and "重要人生事件" in prompt_content:
-                extractor_name = "life_event"
-            elif "人物性格分析师" in prompt_content or "心理学专家和文学作家" in prompt_content:
-                extractor_name = "character_profile"
-            elif "哲学家和思想史研究者" in prompt_content:
-                extractor_name = "worldview"
-            elif "语言学家和命名规范专家" in prompt_content:
-                extractor_name = "alias"
-            elif "专业的人生传记整理专家" in prompt_content:
-                if "不确定年份" in prompt_content or "9999" in prompt_content:
-                    extractor_name = "uncertain_event"
-                else:
-                    extractor_name = "event_dedup"
-            elif "个人回忆录知识图谱" in prompt_content and "命名实体" in prompt_content:
-                extractor_name = "entity"
-            elif "资深传记作家" in prompt_content and "人生事件" in prompt_content:
-                extractor_name = "event"
-            elif "情感侧写专家" in prompt_content:
-                extractor_name = "emotion"
-            elif "语言风格分析专家" in prompt_content:
-                extractor_name = "style"
-            elif "时间推理专家" in prompt_content:
-                extractor_name = "temporal"
+            # 通过标记查表获取位置信息
+            where_info = get_call_location(extractor_name)
             
             filename = f"{timestamp}_{call_id:04d}_{extractor_name}.json"
             filepath = self.__class__._log_dir / filename
@@ -264,6 +252,7 @@ class AsyncQiniuAIClient:
                 "kwargs": kwargs or {},
                 "raw_response": raw_response,
                 "response_length": len(raw_response),
+                "where": where_info,
             }
             
             import json as json_module

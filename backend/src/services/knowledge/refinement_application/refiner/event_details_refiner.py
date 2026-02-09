@@ -10,7 +10,9 @@ from .....infrastructure.llm.concurrency_manager import ConcurrencyManager
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """你是一位专业的传记编辑。你的任务是将多个重复事件合并后的详细描述整合总结为一段连贯的描述。
+SYSTEM_PROMPT = """【summarize_event_details】
+
+你是一位专业的传记编辑。你的任务是将多个重复事件合并后的详细描述整合总结为一段连贯的描述。
 
 【核心要求】
 - 总结到300字左右

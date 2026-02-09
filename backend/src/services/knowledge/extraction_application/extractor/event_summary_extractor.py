@@ -10,7 +10,9 @@ from .....infrastructure.llm.concurrency_manager import ConcurrencyManager
 logger = logging.getLogger(__name__)
 
 
-SUMMARY_SYSTEM_PROMPT = """你是一个专业的对话摘要提取助手。你的任务是从对话文本中提取对话概要，以便用于后续的向量检索。
+SUMMARY_SYSTEM_PROMPT = """【extract_event_summaries】
+
+你是一个专业的对话摘要提取助手。你的任务是从对话文本中提取对话概要，以便用于后续的向量检索。
 
 **引号使用规则**：摘要文本中引用词汇或概念时，只使用中文单引号（'词汇'），严禁使用中文双引号（"词汇"）或英文引号（"word"），以避免与JSON语法冲突。
 

@@ -137,7 +137,9 @@ class EventRefiner:
         
         events_json = json.dumps(cleaned_events, ensure_ascii=False, indent=2)
         user_prompt = DEDUP_PROMPT.format(events_json=events_json)
-        system_prompt = """你是一位专业的人生传记整理专家。请对事件进行智能去重和精准化处理，返回JSON数组。"""
+        system_prompt = """【refine_precise_events】
+
+你是一位专业的人生传记整理专家。请对事件进行智能去重和精准化处理，返回JSON数组。"""
         
         # 调用LLM（系统提示词分离，保证返回JSON）
         try:

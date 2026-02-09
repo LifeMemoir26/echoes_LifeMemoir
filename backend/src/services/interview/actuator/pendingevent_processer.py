@@ -84,7 +84,9 @@ class PendingEventProcesser:
         events_text = "\n".join(events_list)
         
         # 构建系统提示词
-        system_prompt = """你是一个专业的采访对话分析专家。
+        system_prompt = """【extract_pending_event_details】
+
+你是一个专业的采访对话分析专家。
 你的任务是从当前这段对话内容中，针对每个待探索的事件，提取相关的详细信息。
 
 **关键要求**：
@@ -336,7 +338,9 @@ class PendingEventProcesser:
             合并后的内容
         """
         # 构建系统提示词
-        system_prompt = """你是一个专业的信息整合专家。
+        system_prompt = """【merge_pending_event_content】
+
+你是一个专业的信息整合专家。
 你的任务是将两次探索得到的内容进行合并，形成更完整的描述。
 
 **核心要求（采访途中的累积式更新）**：

@@ -210,7 +210,9 @@ class CharacterProfileRefiner:
         
         personality_json = json.dumps(personality, ensure_ascii=False, indent=2)
         user_prompt = PERSONALITY_REFINE_PROMPT.format(personality_json=personality_json)
-        system_prompt = """你是一位心理学专家和文学作家。请撰写一段深刻到位的性格分析（250-300字）。
+        system_prompt = """【refine_personality】
+
+你是一位心理学专家和文学作家。请撰写一段深刻到位的性格分析（250-300字）。
 
 **输出要求**：
 - 必须返回标准JSON对象：{"text": "你的分析内容"}
@@ -249,7 +251,9 @@ class CharacterProfileRefiner:
         
         worldview_json = json.dumps(worldview, ensure_ascii=False, indent=2)
         user_prompt = WORLDVIEW_REFINE_PROMPT.format(worldview_json=worldview_json)
-        system_prompt = """你是一位哲学家和思想史研究者。请撰写一段深刻到位的世界观分析（250-300字）。
+        system_prompt = """【refine_worldview】
+
+你是一位哲学家和思想史研究者。请撰写一段深刻到位的世界观分析（250-300字）。
 
 **输出要求**：
 - 必须返回标准JSON对象：{"text": "你的分析内容"}
@@ -288,7 +292,9 @@ class CharacterProfileRefiner:
         
         aliases_json = json.dumps(aliases, ensure_ascii=False, indent=2)
         user_prompt = ALIAS_REFINE_PROMPT.format(aliases_json=aliases_json)
-        system_prompt = """你是一位语言学家和命名规范专家。请去重和整合别名关联，返回JSON数组。
+        system_prompt = """【refine_aliases】
+
+你是一位语言学家和命名规范专家。请去重和整合别名关联，返回JSON数组。
         **输出要求**：
 - 必须返回标准JSON数组：[{"type": "...", "formal_name": "...", "alias_list": [...]}]
 - 禁止使用markdown代码块包裹（不要```json```）

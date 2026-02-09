@@ -192,7 +192,9 @@ class PendingEventInitializer:
             events_str = "\n\n".join(events_text)
             
             # 构建系统提示词
-            system_prompt = """你是一个专业的采访策划专家和心理学分析师。
+            system_prompt = """【extract_from_database_events】
+
+你是一个专业的采访策划专家和心理学分析师。
 你的任务是分析数据库中低相似度的事件（相似度低说明现有采访中了解较少），提取出有意义的、值得继续追问的探索方向。
 
 **三大核心要求（务必严格遵守）**：
@@ -344,7 +346,9 @@ class PendingEventInitializer:
             logger.info(f"准备分析 {len(chunk_summaries)} 个摘要（总长度: {len(summaries_text)} 字符）")
             
             # 构建系统提示词
-            system_prompt = """你是一个专业的心理学和传记分析专家。
+            system_prompt = """【extract_from_chunks】
+
+你是一个专业的心理学和传记分析专家。
 你的任务是分析现有的采访内容摘要，识别出哪些方面了解极其稀少但对完整理解一个人的人格、世界观、价值观非常重要的事件或方面。
 
 **三大核心要求（务必严格遵守）**：

@@ -51,7 +51,9 @@ class MemoirGenerator:
             return ""
         
         # 构建系统prompt
-        base_instruction = f"""你是一位专业的传记作家，擅长撰写以思想和价值观为核心的深度回忆录。
+        base_instruction = f"""【generate_memoir】
+
+你是一位专业的传记作家，擅长撰写以思想和价值观为核心的深度回忆录。
 
 核心理念：
 回忆录应该是一场灵魂的自白，是世界观、人生观、价值观的真诚流露。事件只是佐证，真正的主角是"我"的思想、信念、对世界的理解。

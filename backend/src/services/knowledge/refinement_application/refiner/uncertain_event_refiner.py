@@ -148,7 +148,9 @@ class UncertainEventRefiner:
             context_events_json=context_json,
             uncertain_events_json=uncertain_json
         )
-        system_prompt = """你是一位专业的人生传记整理专家。请根据上下文推测年份或完善时间补充，返回JSON数组。"""
+        system_prompt = """【refine_uncertain_events】
+
+你是一位专业的人生传记整理专家。请根据上下文推测年份或完善时间补充，返回JSON数组。"""
         
         # 调用LLM（系统提示词分离，保证返回JSON）
         try:

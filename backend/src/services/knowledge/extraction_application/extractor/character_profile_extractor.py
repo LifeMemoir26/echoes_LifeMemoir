@@ -21,7 +21,9 @@ class CharacterProfileExtractor:
     3. 别名关联（人名、地名、物品等）
     """
     
-    SYSTEM_PROMPT = """你是一位专业的人物性格分析师。你的任务是从文本中提取叙述者的性格特征、世界观和别名关联。
+    SYSTEM_PROMPT = """【extract_character_profile】
+
+你是一位专业的人物性格分析师。你的任务是从文本中提取叙述者的性格特征、世界观和别名关联。
 
 **输出格式（JSON）**：
 {{
