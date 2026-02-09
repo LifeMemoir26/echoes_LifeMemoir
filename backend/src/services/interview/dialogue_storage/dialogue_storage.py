@@ -464,6 +464,15 @@ class DialogueStorage:
         """
         return self.event_supplement_manager.get_all()
     
+    def update_event_supplements(self, supplements: List[EventSupplement]) -> None:
+        """
+        更新事件补充信息
+        
+        Args:
+            supplements: 事件补充信息列表
+        """
+        self.event_supplement_manager.update(supplements)
+    
     def update_interview_suggestions(
         self,
         positive_triggers: List[str],
