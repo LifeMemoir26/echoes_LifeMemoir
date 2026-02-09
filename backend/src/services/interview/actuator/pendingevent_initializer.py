@@ -7,9 +7,7 @@ from typing import List
 from pydantic import BaseModel, Field
 
 from ....infrastructure.llm.concurrency_manager import ConcurrencyManager
-from ....infrastructure.database.sqlite_client import SQLiteClient
-from ....infrastructure.database.vector_store import VectorStore
-from ....infrastructure.database.chunk_store import ChunkStore
+from ....infrastructure.database import SQLiteClient, VectorStore, ChunkStore
 from ....core.config import InterviewAssistanceConfig, get_settings
 import random
 

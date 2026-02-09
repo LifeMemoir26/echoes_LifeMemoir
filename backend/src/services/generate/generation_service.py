@@ -10,6 +10,7 @@ from ...infrastructure.database import ChunkStore
 from .generator.timeline_generator import TimelineGenerator
 from .generator.memoir_generator import MemoirGenerator
 from ...infrastructure.llm.concurrency_manager import ConcurrencyManager
+from ...core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,9 @@ class GenerationTimelineService:
         self.username = username
         self.verbose = verbose
         self.concurrency_manager = concurrency_manager
+        
+        # 加载配置
+        self.config = get_settings().generation
         
         # 初始化数据库客户端
         self.sqlite_client = SQLiteClient(
@@ -98,7 +102,7 @@ class GenerationTimelineService:
     async def generate_timeline(
         self,
         ratio: float = 0.3,
-        language_sample_count: int = 10,
+        language_sample_count: Optional[int] = None,
         user_preferences: Optional[str] = None
     ) -> List[Dict[str, str]]:
         """
@@ -106,7 +110,7 @@ class GenerationTimelineService:
         
         Args:
             ratio: 事件筛选比例（0.0-1.0，默认0.3即30%）
-            language_sample_count: 语言样本数量（默认10个）
+            language_sample_count: 语言样本数量（None时使用配置默认值）
             user_preferences: 用户自定义偏好（如"更注重情感描述"、"强调职业发展"等）
             
         Returns:
@@ -116,6 +120,10 @@ class GenerationTimelineService:
             - objective_summary: 客观简述
             - detailed_narrative: 详细自述
         """
+        # 使用配置默认值
+        if language_sample_count is None:
+            language_sample_count = self.config.timeline_language_sample_count
+        
         self._print_step("开始生成时间轴...")
         
         # 步骤1: 从数据库按时间顺序提取life_events
@@ -305,6 +313,9 @@ class GenerationMemoirService:
         self.verbose = verbose
         self.concurrency_manager = concurrency_manager
         
+        # 加载配置
+        self.config = get_settings().generation
+        
         # 初始化数据库客户端
         self.sqlite_client = SQLiteClient(
             username=username,
@@ -331,7 +342,7 @@ class GenerationMemoirService:
     async def generate_memoir(
         self,
         target_length: int = 2000,
-        language_sample_count: int = 20,
+        language_sample_count: Optional[int] = None,
         user_preferences: Optional[str] = None
     ) -> str:
         """
@@ -339,12 +350,16 @@ class GenerationMemoirService:
         
         Args:
             target_length: 目标文本长度（默认2000字，不超过20000字）
-            language_sample_count: 语言样本数量（默认20个）
+            language_sample_count: 语言样本数量（None时使用配置默认值）
             user_preferences: 用户偏好或希望模型的侧重点
             
         Returns:
             回忆录文本（纯文本）
         """
+        # 使用配置默认值
+        if language_sample_count is None:
+            language_sample_count = self.config.memoir_language_sample_count
+        
         self._print_step("开始生成回忆录...")
         
         # 限制长度范围
@@ -464,3 +479,135 @@ class GenerationMemoirService:
         self.sqlite_client.close()
         self.chunk_store.close()
         logger.info("GenerationMemoirPipeline已关闭")
+
+
+# =======================================
+# 供外部调用的接口函数
+# =======================================
+
+async def generate_timeline(
+    username: str,
+    ratio: float = 0.3,
+    user_preferences: Optional[str] = None,
+    auto_save: bool = True,
+    verbose: bool = True
+) -> Dict[str, Any]:
+    """
+    生成时间轴
+    
+    Args:
+        username: 用户名
+        ratio: 事件筛选比例（0.0-1.0，默认0.3即30%）
+        user_preferences: 用户自定义偏好
+        auto_save: 是否自动保存到文件
+        verbose: 是否打印详细信息
+        
+    Returns:
+        包含时间轴内容和文件路径的字典
+    """
+    from ...infrastructure.llm.concurrency_manager import get_concurrency_manager
+    
+    logger.info(f"开始生成时间轴: user={username}, ratio={ratio}")
+    
+    # 获取并发管理器
+    concurrency_manager = get_concurrency_manager()
+    
+    # 创建服务
+    service = GenerationTimelineService(
+        username=username,
+        concurrency_manager=concurrency_manager,
+        data_base_dir=None,  # 使用默认路径
+        verbose=verbose
+    )
+    
+    try:
+        # 生成时间轴（使用配置的默认语言样本数量）
+        timeline = await service.generate_timeline(
+            ratio=ratio,
+            language_sample_count=None,  # 使用配置默认值
+            user_preferences=user_preferences
+        )
+        
+        result = {
+            'timeline': timeline,
+            'event_count': len(timeline),
+            'username': username
+        }
+        
+        # 自动保存
+        if auto_save and timeline:
+            txt_path, json_path = service.save_timeline(timeline)
+            result['txt_path'] = str(txt_path)
+            result['json_path'] = str(json_path)
+            
+            if verbose:
+                logger.info(f"时间轴已保存: {len(timeline)} 个事件")
+        
+        return result
+        
+    finally:
+        service.close()
+
+
+async def generate_memoir(
+    username: str,
+    target_length: int = 2000,
+    user_preferences: Optional[str] = None,
+    auto_save: bool = True,
+    verbose: bool = True
+) -> Dict[str, Any]:
+    """
+    生成回忆录
+    
+    Args:
+        username: 用户名
+        target_length: 目标长度（字数，默认2000，不超过20000）
+        user_preferences: 用户自定义偏好
+        auto_save: 是否自动保存到文件
+        verbose: 是否打印详细信息
+        
+    Returns:
+        包含回忆录内容和文件路径的字典
+    """
+    from ...infrastructure.llm.concurrency_manager import get_concurrency_manager
+    
+    logger.info(f"开始生成回忆录: user={username}, target_length={target_length}")
+    
+    # 获取并发管理器
+    concurrency_manager = get_concurrency_manager()
+    
+    # 创建服务
+    service = GenerationMemoirService(
+        username=username,
+        concurrency_manager=concurrency_manager,
+        data_base_dir=None,  # 使用默认路径
+        verbose=verbose
+    )
+    
+    try:
+        # 生成回忆录（使用配置的默认语言样本数量）
+        memoir_text = await service.generate_memoir(
+            target_length=target_length,
+            language_sample_count=None,  # 使用配置默认值
+            user_preferences=user_preferences
+        )
+        
+        result = {
+            'memoir': memoir_text,
+            'length': len(memoir_text) if memoir_text else 0,
+            'username': username
+        }
+        
+        # 自动保存
+        if auto_save and memoir_text:
+            txt_path, json_path = service.save_memoir(memoir_text)
+            result['txt_path'] = str(txt_path)
+            result['json_path'] = str(json_path)
+            
+            if verbose:
+                logger.info(f"回忆录已保存: {len(memoir_text)} 字")
+        
+        return result
+        
+    finally:
+        service.close()

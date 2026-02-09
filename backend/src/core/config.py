@@ -131,12 +131,31 @@ class InterviewAssistanceConfig(BaseSettings):
         env_prefix = "INTERVIEW_"
 
 
+class GenerationConfig(BaseSettings):
+    """生成配置 - 时间轴和回忆录生成"""
+    # 时间轴生成配置
+    timeline_language_sample_count: int = Field(
+        default=10, 
+        description="时间轴生成时的语言样本数量"
+    )
+    
+    # 回忆录生成配置
+    memoir_language_sample_count: int = Field(
+        default=20, 
+        description="回忆录生成时的语言样本数量"
+    )
+    
+    class Config:
+        env_prefix = "GENERATION_"
+
+
 class KnowledgeExtractionSettings(BaseSettings):
     """知识提取模块总配置"""
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     interview: InterviewAssistanceConfig = Field(default_factory=InterviewAssistanceConfig)
+    generation: GenerationConfig = Field(default_factory=GenerationConfig)
     
     # 调试模式
     debug: bool = Field(default=False, description="调试模式")
