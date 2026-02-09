@@ -4,12 +4,17 @@
 """
 from .extraction_application import LifeEventExtractor, CharacterProfileExtractor, EventSummaryExtractor
 from .refinement_application import RefinementPipeline, EventRefiner, UncertainEventRefiner, CharacterProfileRefiner
-from .extraction_application.extraction_application import KnowledgeService
-from .extraction_application.vector_application import VectorService
+from .extraction_application.extraction_application import ExtractionApplication
+from .extraction_application.vector_application import  VectorApplication
+from .knowledge_service import KnowledgeService, process_knowledge_file
 
 __all__ = [
-    # Services
-    'KnowledgeService', 'VectorService',
+    # Pipeline Service (高层编排)
+    'KnowledgeService',
+    'process_knowledge_file',
+    # Application Services (中层应用服务)
+    'ExtractionApplication', 
+    'VectorApplication',
     # Extractors
     'LifeEventExtractor', 'CharacterProfileExtractor', 'EventSummaryExtractor',
     # Refiners

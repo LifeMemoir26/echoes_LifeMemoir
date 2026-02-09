@@ -21,9 +21,9 @@ from ..refinement_application.refinement_application import RefinementPipeline
 logger = logging.getLogger(__name__)
 
 
-class KnowledgeService:
+class ExtractionApplication:
     """
-    知识图谱提取Pipeline
+    知识图谱提取应用
     
     工作流程：
     1. 文本切分（8000字窗口，4000字步长）
@@ -71,7 +71,7 @@ class KnowledgeService:
         self.character_store = CharacterStore(self.sqlite_client)
         
         logger.info(
-            f"KnowledgeService初始化完成: "
+            f"ExtractionApplication初始化完成: "
             f"用户={username}, 并发={self.concurrency_manager.concurrency_level}"
         )
     
@@ -272,8 +272,8 @@ async def process_text_file(
     
     logger.info(f"读取文件: {file_path}, 长度: {len(text)}字符")
     
-    # 创建Service
-    with KnowledgeService(
+    # 创建应用
+    with ExtractionApplication(
         username=username,
         data_base_dir=data_base_dir,
         concurrency_level=concurrency_level,

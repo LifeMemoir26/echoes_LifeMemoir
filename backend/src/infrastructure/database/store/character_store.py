@@ -1,5 +1,5 @@
 """
-"""SQLite数据存储层 - 人物特征存储
+SQLite数据存储层 - 人物特征存储
 """
 import logging
 import json

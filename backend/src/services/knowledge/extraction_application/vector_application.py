@@ -16,9 +16,9 @@ from ....infrastructure.llm.concurrency_manager import ConcurrencyManager
 logger = logging.getLogger(__name__)
 
 
-class VectorService:
+class VectorApplication:
     """
-    向量数据库构建Pipeline
+    向量数据库构建应用
     
     工作流程：
     1. 使用1000字窗口/900字滑动切分文本
@@ -86,7 +86,7 @@ class VectorService:
         )
         
         logger.info(
-            f"VectorService已初始化 - 用户: {username}, "
+            f"VectorApplication已初始化 - 用户: {username}, "
             f"模型: {model}, 批次大小: {self.batch_size}"
         )
     
@@ -357,7 +357,7 @@ class VectorService:
     def close(self):
         """关闭所有连接"""
         self.chunk_store.close()
-        logger.info("VectorService已关闭")
+        logger.info("VectorApplication已关闭")
 
 
 async def test_vector_pipeline():
@@ -369,8 +369,8 @@ async def test_vector_pipeline():
     # 获取全局ConcurrencyManager
     concurrency_manager = get_concurrency_manager()
     
-    # 创建Service
-    service = VectorService(
+    # 创建应用
+    service = VectorApplication(
         username="test_user",
         concurrency_manager=concurrency_manager,
         model="claude-3.7-sonnet"

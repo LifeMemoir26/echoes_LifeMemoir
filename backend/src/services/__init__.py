@@ -1,13 +1,14 @@
 """
 业务逻辑服务层
 """
-from .knowledge import KnowledgeService, VectorService
+from .knowledge import KnowledgeService, ExtractionApplication, VectorApplication
 from .interview import InterviewService
 from .generate import GenerationTimelineService, GenerationMemoirService
 
 __all__ = [
     "KnowledgeService",
-    "VectorService",
+    "ExtractionApplication",
+    "VectorApplication",
     "InterviewService",
     "GenerationTimelineService",
     "GenerationMemoirService",
