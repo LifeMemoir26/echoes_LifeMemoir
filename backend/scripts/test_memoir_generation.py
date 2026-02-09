@@ -9,8 +9,7 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.services.generate import GenerationMemoirService
-from src.infrastructure.llm.concurrency_manager import get_concurrency_manager
+from src.services.generate import generate_memoir
 
 # 配置日志
 logging.basicConfig(
@@ -56,24 +55,17 @@ async def main():
         print("使用默认生成方式")
     
     try:
-        # 获取全局并发管理器
-        concurrency_manager = get_concurrency_manager()
-        
-        # 初始化回忆录生成服务
-        service = GenerationMemoirService(
+        # 使用便捷函数生成回忆录
+        result = await generate_memoir(
             username=username,
-            concurrency_manager=concurrency_manager,
+            target_length=target_length,
+            user_preferences=user_preferences,
+            auto_save=True,
             verbose=True
         )
         
-        # 生成回忆录
-        memoir = await service.generate_memoir(
-            target_length=target_length,
-            language_sample_count=20,
-            user_preferences=user_preferences
-        )
-        
-        if memoir:
+        if result and result.get('memoir'):
+            memoir = result['memoir']
             print(f"\n{'='*60}")
             print("回忆录预览（前500字）")
             print('='*60)
@@ -81,13 +73,12 @@ async def main():
             if len(memoir) > 500:
                 print(f"\n...（共{len(memoir)}字，仅显示前500字）\n")
             
-            # 保存到文件
-            txt_path, json_path = service.save_memoir(memoir)
+            # 显示文件路径
+            print(f"\n💾 文件已保存:")
+            print(f"   文本格式: {result.get('txt_path')}")
+            print(f"   JSON格式: {result.get('json_path')}")
         else:
             print("\n❌ 回忆录生成失败")
-        
-        # 关闭Pipeline
-        service.close()
         
     except Exception as e:
         logger.error(f"回忆录生成失败: {e}", exc_info=True)
