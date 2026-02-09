@@ -3,9 +3,9 @@ SQLite客户端 - 负责数据库连接和基础操作
 """
 import logging
 import sqlite3
-import json
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from ...core.paths import get_data_root
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,7 @@ class SQLiteClient:
             self.data_dir = Path(data_base_dir) / username
         else:
             # 默认：项目根目录/data/{username}
-            project_root = Path(__file__).parent.parent.parent.parent
-            self.data_dir = project_root / "data" / username
+            self.data_dir = get_data_root() / username
         
         # 创建数据目录
         self.data_dir.mkdir(parents=True, exist_ok=True)

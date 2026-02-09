@@ -8,9 +8,9 @@ from typing import List, Dict, Any, Optional
 import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
-from pathlib import Path
 import time
 import math
+from ....core.paths import get_data_root
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,8 @@ class VectorStore:
         )
         
         # data/models
-        # backend/src/database/vector_store.py -> backend/
-        backend_root = Path(__file__).parent.parent.parent
-        project_root = backend_root.parent
-        model_cache_dir = project_root / "data" / "models"
+
+        model_cache_dir = get_data_root() / "models"
         
         # 确保目录存在
         model_cache_dir.mkdir(parents=True, exist_ok=True)

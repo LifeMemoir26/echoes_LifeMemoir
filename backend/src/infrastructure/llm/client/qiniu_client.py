@@ -3,15 +3,15 @@
 
 被 ConcurrencyManager 使用，提供底层 HTTP 调用
 """
-import json
 import logging
 import asyncio
 from typing import Optional, Any
 from dataclasses import dataclass
-
+from ....core.paths import get_log_root
+from datetime import datetime 
 import httpx
 
-from ...core.config import get_settings, LLMConfig
+from ....core.config import get_settings, LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +44,10 @@ class AsyncQiniuAIClient:
     @classmethod
     def _init_shared_log_dir(cls):
         """初始化共享日志目录（类方法，只执行一次）"""
-        if cls._log_dir is None:
-            from datetime import datetime
-            from pathlib import Path
+        if cls._log_dir is None:           
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            cls._log_dir = Path(__file__).parent.parent.parent.parent / ".log" / "API_generate_database" / timestamp
+            log_root = get_log_root()
+            cls._log_dir = log_root / "API_generate_database" / timestamp
             cls._log_dir.mkdir(parents=True, exist_ok=True)
             cls._counter_lock = asyncio.Lock()
             logger.info(f"API日志目录初始化: {cls._log_dir}")

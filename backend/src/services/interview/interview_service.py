@@ -23,10 +23,9 @@ from .actuator import (
     SupplementExtractor,
     SummaryProcesser,
     PendingEventProcesser,
-    PendingEventInitializer,
-    ContextInfo
+    PendingEventInitializer
 )
-from ...domain.schemas.event import EventSummary
+from .actuator.supplement_extractor import ContextInfo
 
 logger = logging.getLogger(__name__)
 
@@ -135,9 +134,8 @@ class InterviewService:
         
         # 设置数据目录
         if data_base_dir is None:
-            backend_root = Path(__file__).parent.parent.parent
-            project_root = backend_root.parent
-            data_base_dir = project_root / "data"
+            from ...core.paths import get_data_root
+            data_base_dir = get_data_root()
         self.data_base_dir = Path(data_base_dir)
         
         # 初始化对话存储（整合缓冲区+临时存储+总结管理）

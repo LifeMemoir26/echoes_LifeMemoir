@@ -29,8 +29,8 @@ class ChunkStore:
             self.data_dir = Path(data_base_dir) / username
         else:
             # 默认：项目根目录/data/{username}
-            project_root = Path(__file__).parent.parent.parent.parent
-            self.data_dir = project_root / "data" / username
+            from ....core.paths import get_data_root
+            self.data_dir = get_data_root() / username
         
         # 创建数据目录
         try:
