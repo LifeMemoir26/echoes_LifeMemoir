@@ -1,6 +1,6 @@
 """
 对话存储统一管理类
-整合对话缓冲区、临时存储、最近总结和待探索事件的功能
+整合对话缓冲区、临时存储、最近总结、待探索事件和背景信息的功能
 """
 from typing import Optional, List, Tuple, TYPE_CHECKING
 import logging
@@ -15,6 +15,8 @@ from .pendingevent import (
     UPDATE_SUMMARY
 )
 from .summary import SummaryManager
+from .event_supplement import EventSupplement, EventSupplementManager
+from .interview_suggestion import InterviewSuggestions, InterviewSuggestionManager
 
 if TYPE_CHECKING:
     from ..actuator.pendingevent_initializer import PendingEventCandidate
@@ -26,22 +28,26 @@ class DialogueStorage:
     """
     对话存储统一管理类
     
-    整合四层存储机制：
+    整合六层存储机制：
     1. 对话缓冲区（DialogueBuffer）：维护最近N轮对话
     2. 临时存储区（TmpStorage）：累积移除的对话，达到阈值后输出文本块
     3. 最近总结（SummaryManager）：存储最近一次提取的总结信息
     4. 待探索事件（PendingEventManager）：管理需要深入探索的事件列表
+    5. 事件补充信息（EventSupplementManager）：存储最新的事件详细补充
+    6. 采访建议（InterviewSuggestionManager）：存储正面触发点和敏感话题
     
     工作流程：
     - 添加对话 -> 缓冲区满时移除最旧对话 -> 移入临时存储
     - 临时存储达到阈值 -> 输出文本块
     - 文本块提取总结 -> 设置为最近总结（覆盖旧总结）
-    - 从总结中识别需要探索的事件 -> 添加到待探索事件列表
+    - 从总结中识别需要探索的事件 -> 添加到待探索事件列表（供前端轮询）
+    - 生成背景信息 -> 更新事件补充和采访建议（供前端轮询）
     
     特性：
     - 模块化设计
     - 统一的接口调用
     - 线程/异步安全
+    - 支持前端轮询获取背景信息
     """
     
     def __init__(
@@ -56,14 +62,16 @@ class DialogueStorage:
             queue_max_size: 对话队列最大容量（轮数）
             storage_threshold: 临时存储字符数阈值
         """
-        # 初始化四个组件
+        # 初始化六个组件
         self.buffer = DialogueBuffer(max_size=queue_max_size)
         self.tmp_storage = TmpStorage(threshold=storage_threshold)
         self.summary_manager = SummaryManager()
         self.pending_event_manager = PendingEventManager()
+        self.event_supplement_manager = EventSupplementManager()
+        self.interview_suggestion_manager = InterviewSuggestionManager()
         
         logger.info(
-            f"DialogueStorage initialized: "
+            f"DialogueStorage initialized with 6 components: "
             f"queue_max_size={queue_max_size}, storage_threshold={storage_threshold}"
         )
     
@@ -425,11 +433,13 @@ class DialogueStorage:
     # =========================================================================
     
     async def clear_all(self):
-        """清空所有存储区域（包括对话缓冲区、临时存储、总结和待探索事件）"""
+        """清空所有存储区域（包括对话缓冲区、临时存储、总结、待探索事件和背景信息）"""
         self.buffer.clear()
         self.tmp_storage.clear()
         await self.clear_summaries()
         await self.clear_pending_events()
+        self.event_supplement_manager.clear()
+        self.interview_suggestion_manager.clear()
         logger.info("Cleared all dialogue storage areas")
     
     def clear_queue(self):
@@ -440,6 +450,63 @@ class DialogueStorage:
         """仅清空临时存储"""
         self.tmp_storage.clear()
     
+    # =========================================================================
+    # 背景信息管理（供前端轮询）
+    # =========================================================================
+    
+    def get_event_supplements(self) -> List[EventSupplement]:
+        """
+        获取事件补充信息（供前端轮询）
+        
+        Returns:
+            事件补充信息列表
+        """
+        return self.event_supplement_manager.get_all()
+    
+    def update_interview_suggestions(
+        self,
+        positive_triggers: List[str],
+        sensitive_topics: List[str]
+    ) -> None:
+        """
+        更新采访建议
+        
+        Args:
+            positive_triggers: 正面触发点列表
+            sensitive_topics: 敏感话题列表
+        """
+        self.interview_suggestion_manager.update(positive_triggers, sensitive_topics)
+    
+    def get_interview_suggestions(self) -> InterviewSuggestions:
+        """
+        获取采访建议（供前端轮询）
+        
+        Returns:
+            采访建议对象（包含正面触发点和敏感话题）
+        """
+        return self.interview_suggestion_manager.get_all()
+    
+    def get_background_info(self) -> dict:
+        """
+        获取完整的背景信息（供前端轮询）
+        
+        Returns:
+            包含事件补充和采访建议的字典
+        """
+        supplements = self.event_supplement_manager.get_all()
+        suggestions = self.interview_suggestion_manager.get_all()
+        
+        return {
+            "event_supplements": [s.model_dump() for s in supplements],
+            "positive_triggers": suggestions.positive_triggers,
+            "sensitive_topics": suggestions.sensitive_topics,
+            "meta": {
+                "supplement_count": len(supplements),
+                "positive_trigger_count": len(suggestions.positive_triggers),
+                "sensitive_topic_count": len(suggestions.sensitive_topics)
+            }
+        }
+    
     def __str__(self) -> str:
         """字符串表示"""
         return (
@@ -447,5 +514,7 @@ class DialogueStorage:
             f"buffer={self.buffer}, "
             f"tmp_storage={self.tmp_storage}, "
             f"summaries={self.summary_manager}, "
-            f"pending_events={self.pending_event_manager})"
+            f"pending_events={self.pending_event_manager}, "
+            f"supplements={self.event_supplement_manager}, "
+            f"suggestions={self.interview_suggestion_manager})"
         )

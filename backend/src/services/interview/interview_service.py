@@ -6,9 +6,8 @@ import asyncio
 import logging
 from typing import List, Optional, Dict, Any
 from pathlib import Path
-from pydantic import BaseModel, Field
 import hashlib
-
+from ...infrastructure.llm.concurrency_manager import get_concurrency_manager
 from ...core.config import get_settings, InterviewAssistanceConfig
 from ...infrastructure.llm.concurrency_manager import ConcurrencyManager
 from ...infrastructure.database import VectorStore
@@ -185,9 +184,6 @@ class InterviewService:
             config=self.config
         )
         
-        # 最新的背景信息（由 _process_chunk 更新）
-        self.latest_context: Optional[ContextInfo] = None
-        
         logger.info(
             f"InterviewService initialized for user '{username}': "
             f"queue_size={config.dialogue_queue_size}, "
@@ -245,17 +241,23 @@ class InterviewService:
         speaker: str,
         content: str,
         timestamp: Optional[float] = None
-    ) -> Optional[ContextInfo]:
+    ) -> None:
         """
         添加一轮对话
+        
+        处理流程：
+        1. 添加对话到缓冲区
+        2. 如果触发文本块输出，自动提取总结和采访辅助信息
+        3. 采访辅助信息更新到内存存储，供前端轮询获取
         
         Args:
             speaker: 说话者标识
             content: 对话内容
             timestamp: 时间戳（可选）
         
-        Returns:
-            如果生成了新的背景补充信息，返回ContextInfo；否则返回None
+        Note:
+            不返回值，采访辅助信息存储在内存中
+            前端通过 get_interview_info() 轮询获取
         """
         # 添加到缓冲区，如果临时存储达到阈值会返回文本块
         chunk = self.storage.add_dialogue(speaker, content, timestamp)
@@ -268,13 +270,11 @@ class InterviewService:
         
         # 如果有文本块输出，处理它
         if chunk is not None:
-            return await self._process_chunk(chunk)
-        
-        return None
+            await self._process_chunk(chunk)
     
-    async def _process_chunk(self, chunk: TextChunk) -> Optional[ContextInfo]:
+    async def _process_chunk(self, chunk: TextChunk) -> None:
         """
-        处理文本块：提取总结 -> 并发更新待探索事件和生成背景信息
+        处理文本块：提取总结 -> 并发更新待探索事件和生成采访辅助信息
         
         处理流程：
         1. 【1.1】提取16条多角度事件总结（结构化输出{重要性，总结}）
@@ -284,9 +284,6 @@ class InterviewService:
         
         Args:
             chunk: 文本块（从临时存储获得）
-        
-        Returns:
-            生成的背景信息
         """
         logger.info(f"Processing chunk: {chunk}")
         
@@ -315,7 +312,7 @@ class InterviewService:
             # 创建并发任务
             tasks = []
             
-            # 任务1: 处理待探索事件
+            # 并发任务1: 处理待探索事件
             pending_count = await self.storage.pending_events_count()
             if pending_count > 0:
                 logger.info(f"待探索事件总数: {pending_count}")
@@ -324,14 +321,15 @@ class InterviewService:
                 logger.info("无待探索事件，跳过")
                 tasks.append(asyncio.sleep(0)) 
             
-            # 任务2: 生成背景补充信息
+            # 并发任务2: 生成背景补充信息（内部也异步存储）
             tasks.append(
                 self.supplement_extractor.generate_context_info(
                     new_summaries=summary_tuples,
                     summary_manager=self.storage.summary_manager,
                     vector_store=self.vector_store,
                     chunk_store=self.chunk_store,
-                    character_profile=character_profile
+                    character_profile=character_profile,
+                    dialogue_storage=self.storage 
                 )
             )
             
@@ -345,14 +343,10 @@ class InterviewService:
                 f"{len(context_info.sensitive_topics)} 条敏感话题"
             )
             
-            # 保存最新的背景信息
-            self.latest_context = context_info
-            
-            return context_info
+            logger.info("背景信息已通过异步方式存储到内存，供前端轮询获取")
             
         except Exception as e:
             logger.error(f"处理文本块失败: {e}", exc_info=True)
-            return None
     
     async def _process_pending_events(self, chunk: TextChunk):
         """
@@ -428,14 +422,74 @@ class InterviewService:
         except Exception as e:
             logger.error(f"Failed to process pending events: {e}", exc_info=True)
     
-    def get_latest_context(self) -> Optional[ContextInfo]:
+    def get_background_info(self) -> dict:
         """
-        获取最新的背景信息
+        获取采访辅助信息（供前端轮询）
+        
+        包含：
+        - event_supplements: 事件补充信息列表
+        - positive_triggers: 正面触发点列表
+        - sensitive_topics: 敏感话题列表
+        - meta: 元信息（各项数量）
         
         Returns:
-            最新的背景信息，如果没有则返回None
+            背景信息字典
         """
-        return self.latest_context
+        return self.storage.get_background_info()
+    
+    def get_event_supplements(self) -> List:
+        """
+        获取事件补充信息（供前端轮询）
+        
+        Returns:
+            事件补充信息列表
+        """
+        return self.storage.get_event_supplements()
+    
+    def get_interview_suggestions(self):
+        """
+        获取采访建议（供前端轮询）
+        
+        Returns:
+            采访建议对象（包含正面触发点和敏感话题）
+        """
+        return self.storage.get_interview_suggestions()
+    
+    async def get_interview_info(self) -> dict:
+        """
+        获取完整的采访信息（供前端轮询）
+        
+        包含：
+        - background_info: 背景信息（事件补充、正面触发点、敏感话题）
+        - pending_events: 待探索事件列表（带优先级和已探索字数）
+        - session_summaries: 会话总结
+        
+        Returns:
+            完整的采访信息字典
+        """
+        # 获取背景信息
+        background_info = self.storage.get_background_info()
+        
+        # 获取待探索事件
+        pending_events_summary = await self.get_pending_events_summary()
+        
+        # 获取会话总结
+        session_summaries = await self.get_session_summaries()
+        
+        return {
+            "background_info": background_info,
+            "pending_events": pending_events_summary,
+            "session_summaries": session_summaries,
+            "meta": {
+                "total_supplements": background_info['meta']['supplement_count'],
+                "total_positive_triggers": background_info['meta']['positive_trigger_count'],
+                "total_sensitive_topics": background_info['meta']['sensitive_topic_count'],
+                "total_pending_events": pending_events_summary['total'],
+                "priority_pending_events": pending_events_summary['priority_count'],
+                "unexplored_pending_events": pending_events_summary['unexplored_count'],
+                "total_summaries": len(session_summaries)
+            }
+        }
     
     def get_current_dialogue(self) -> List[DialogueTurn]:
         """
@@ -455,27 +509,23 @@ class InterviewService:
         """
         return await self.storage.get_latest_summaries_formatted()
     
-    async def flush_buffer(self) -> Optional[ContextInfo]:
+    async def flush_buffer(self) -> None:
         """
         手动刷新缓冲区（无论是否达到阈值）
         用于会话结束时处理剩余内容
         
-        Returns:
-            如果有内容，返回生成的背景信息；否则返回None
+        背景信息会自动更新到内存存储
         """
         chunk = self.storage.flush_tmp_storage()
         
         if chunk is not None:
             logger.info("Manually flushing buffer")
-            return await self._process_chunk(chunk)
-        
-        return None
+            await self._process_chunk(chunk)
     
     async def reset_session(self):
-        """重置会话状态（清空缓冲区和会话总结）"""
+        """重置会话状态（清空缓冲区、会话总结和背景信息）"""
         await self.storage.clear_all()
-        await self.storage.clear_summaries()
-        self.latest_context = None
+        logger.info("Session reset")
     
     async def get_pending_events_summary(self) -> Dict[str, Any]:
         """
@@ -503,4 +553,160 @@ class InterviewService:
                 for event in all_events
             ]
         }
-        logger.info("Session reset")
+
+
+# ======================================
+# 对外接口函数
+# ======================================
+
+async def create_interview_session(
+    username: str,
+    config: Optional[InterviewAssistanceConfig] = None,
+    verbose: bool = False,
+) -> InterviewService:
+    """
+    创建采访会话（便捷函数）
+    
+    自动处理：
+    - 并发管理器初始化
+    - 数据目录配置
+    - 采访配置加载
+    - 待探索事件初始化
+    
+    Args:
+        username: 用户名
+        config: 采访配置（可选）
+        verbose: 是否详细输出
+    
+    Returns:
+        InterviewService 实例
+    
+    Example:
+        ```python
+        # 创建会话
+        session = await create_interview_session("张三", verbose=True)
+        
+        # 添加对话
+        await add_dialogue(session, "志愿者", "您好，今天聊聊您的童年吧")
+        await add_dialogue(session, "张三", "好啊，我的童年在农村...")
+        
+        # 获取采访信息
+        info = await get_interview_info(session)
+        print(info['background_info'])
+        print(info['pending_events'])
+        ```
+    """
+    # 自动获取并发管理器
+    concurrency_manager = get_concurrency_manager()
+    
+    # 创建服务实例
+    service = await InterviewService.create(
+        username=username,
+        concurrency_manager=concurrency_manager,
+        data_base_dir=None,  
+        config=config,  
+        verbose=verbose,
+        auto_initialize_events=True  # 默认自动初始化
+    )
+    
+    return service
+
+
+async def add_dialogue(
+    session: InterviewService,
+    speaker: str,
+    content: str,
+    timestamp: Optional[float] = None
+) -> None:
+    """
+    添加对话到采访会话（便捷函数）
+    
+    Args:
+        session: InterviewService 实例
+        speaker: 说话者标识
+        content: 对话内容
+        timestamp: 时间戳（可选）
+    
+    Note:
+        背景信息会自动更新到内存
+        使用 get_interview_info() 获取最新信息
+    
+    Example:
+        ```python
+        await add_dialogue(session, "志愿者", "您的童年是怎样的？")
+        await add_dialogue(session, "张三", "我的童年在农村度过...")
+        ```
+    """
+    await session.add_dialogue(speaker, content, timestamp)
+
+
+async def get_interview_info(session: InterviewService) -> dict:
+    """
+    获取完整的采访信息（便捷函数）
+    
+    返回内容：
+    - background_info: 事件补充、正面触发点、敏感话题
+    - pending_events: 待探索事件列表
+    - session_summaries: 会话总结
+    - meta: 统计信息
+    
+    Args:
+        session: InterviewService 实例
+    
+    Returns:
+        完整的采访信息字典
+    
+    Example:
+        ```python
+        info = await get_interview_info(session)
+        
+        # 访问背景信息
+        supplements = info['background_info']['event_supplements']
+        triggers = info['background_info']['positive_triggers']
+        topics = info['background_info']['sensitive_topics']
+        
+        # 访问待探索事件
+        events = info['pending_events']['events']
+        
+        # 访问统计信息
+        meta = info['meta']
+        ```
+    """
+    return await session.get_interview_info()
+
+
+async def flush_session_buffer(session: InterviewService) -> None:
+    """
+    手动刷新会话缓冲区（便捷函数）
+    
+    在会话结束时调用，处理剩余的对话内容
+    
+    Args:
+        session: InterviewService 实例
+    
+    Example:
+        ```python
+        # 会话结束时
+        await flush_session_buffer(session)
+        final_info = await get_interview_info(session)
+        ```
+    """
+    await session.flush_buffer()
+
+
+async def reset_interview_session(session: InterviewService) -> None:
+    """
+    重置采访会话（便捷函数）
+    
+    清空所有数据：对话缓冲区、总结、背景信息
+    
+    Args:
+        session: InterviewService 实例
+    
+    Example:
+        ```python
+        # 重新开始采访
+        await reset_interview_session(session)
+        ```
+    """
+    await session.reset_session()
