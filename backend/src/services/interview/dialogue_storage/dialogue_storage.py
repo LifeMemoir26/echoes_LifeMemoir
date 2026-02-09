@@ -15,11 +15,12 @@ from .pendingevent import (
     UPDATE_SUMMARY
 )
 from .summary import SummaryManager
-from .event_supplement import EventSupplement, EventSupplementManager
-from .interview_suggestion import InterviewSuggestions, InterviewSuggestionManager
+from .eventsupplement import EventSupplementManager
+from .interviewsuggestion import InterviewSuggestionManager
+from ....domain.schemas.interview import EventSupplement, InterviewSuggestions
 
 if TYPE_CHECKING:
-    from ..actuator.pendingevent_initializer import PendingEventCandidate
+    from ....domain.schemas.interview import PendingEventCandidate
 
 logger = logging.getLogger(__name__)
 

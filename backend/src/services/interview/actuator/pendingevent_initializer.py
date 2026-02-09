@@ -4,21 +4,14 @@
 """
 import logging
 from typing import List
-from pydantic import BaseModel, Field
+import random
 
 from ....infrastructure.llm.concurrency_manager import ConcurrencyManager
 from ....infrastructure.database import SQLiteClient, VectorStore, ChunkStore
 from ....core.config import InterviewAssistanceConfig, get_settings
-import random
+from ....domain.schemas.interview import PendingEventCandidate
 
 logger = logging.getLogger(__name__)
-
-
-class PendingEventCandidate(BaseModel):
-    """待探索事件候选"""
-    summary: str = Field(description="事件摘要")
-    is_priority: bool = Field(description="是否优先")
-    source: str = Field(description="来源：database（来自life_events）或 chunks（来自AI分析）")
 
 
 class PendingEventInitializer:

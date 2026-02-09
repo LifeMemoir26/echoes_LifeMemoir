@@ -4,37 +4,18 @@
 """
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-from pydantic import BaseModel, Field
 import asyncio
 
 from ....infrastructure.llm.concurrency_manager import ConcurrencyManager
 from ....core.config import get_settings
+from ....domain.schemas.interview import (
+    EventSupplement,
+    EventSupplementList,
+    InterviewSuggestions,
+    ContextInfo
+)
 
 logger = logging.getLogger(__name__)
-
-
-class EventSupplement(BaseModel):
-    """事件补充信息"""
-    event_summary: str = Field(description="事件摘要（20-30字）")
-    event_details: str = Field(description="详细补充信息（前后经过、起因、结果、背景、天气、地点人物等）")
-
-
-class EventSupplementList(BaseModel):
-    """事件补充列表"""
-    supplements: List[EventSupplement] = Field(description="事件补充信息列表")
-
-
-class InterviewSuggestions(BaseModel):
-    """采访建议"""
-    positive_triggers: List[str] = Field(description="让叙述者高兴的点、激发联想的人或事物")
-    sensitive_topics: List[str] = Field(description="可能引发伤感的话题，需要谨慎处理")
-
-
-class ContextInfo(BaseModel):
-    """采访背景信息"""
-    event_supplements: List[EventSupplement] = Field(description="事件补充信息列表")
-    positive_triggers: List[str] = Field(description="让叙述者高兴的点、激发联想的人或事物")
-    sensitive_topics: List[str] = Field(description="可能引发伤感的话题，需要谨慎处理")
 
 
 class SupplementExtractor:

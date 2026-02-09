@@ -6,10 +6,10 @@ import asyncio
 from typing import List, Optional, Dict, TYPE_CHECKING
 import logging
 
-from ....domain.schemas.event import PendingEvent
+from ....domain.schemas.interview import PendingEvent
 
 if TYPE_CHECKING:
-    from ..actuator.pendingevent_initializer import PendingEventCandidate
+    from ....domain.schemas.interview import PendingEventCandidate
 
 logger = logging.getLogger(__name__)
 

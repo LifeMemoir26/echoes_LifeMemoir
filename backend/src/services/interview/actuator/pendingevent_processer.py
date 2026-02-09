@@ -5,17 +5,22 @@
 import logging
 from typing import List, Dict, Optional, Tuple, Any
 from pydantic import BaseModel, Field
+import asyncio
 
 from ....infrastructure.llm.concurrency_manager import ConcurrencyManager
+from ....domain.schemas.interview import PendingEvent
 from ..dialogue_storage import TextChunk
-from ..dialogue_storage.pendingevent import PendingEvent
-import asyncio
 
 logger = logging.getLogger(__name__)
 
 
-class EventDetailExtraction(BaseModel):
-    """事件详细信息提取结果"""
+class _InternalEventDetailExtraction(BaseModel):
+    """
+    内部事件详细信息提取结果（仅供 PendingEventProcesser 内部使用）
+    
+    注意：与 domain.schemas.interview.EventDetailExtraction 不同，
+    此类用于内部处理流程，字段结构有所差异。
+    """
     event_id: str = Field(description="事件ID")
     details: str = Field(description="从当前对话中提取的详细信息")
     has_content: bool = Field(description="是否提取到了相关内容")
@@ -126,7 +131,7 @@ class PendingEventProcesser:
             
             # 解析结果
             extractions_data = result.get("extractions", [])
-            extractions = [EventDetailExtraction(**e) for e in extractions_data]
+            extractions = [_InternalEventDetailExtraction(**e) for e in extractions_data]
             
             # 使用 AI 返回的 has_content 字段来判断，只保留有内容的事件
             filtered_extractions = [

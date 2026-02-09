@@ -4,7 +4,7 @@
 """
 from .summary_processer import SummaryProcesser, EventSummary
 from .pendingevent_processer import PendingEventProcesser
-from .pendingevent_initializer import PendingEventInitializer, PendingEventCandidate
+from .pendingevent_initializer import PendingEventInitializer
 from .supplement_extractor import SupplementExtractor
 
 __all__ = [
@@ -12,6 +12,5 @@ __all__ = [
     "EventSummary",
     "PendingEventProcesser",
     "PendingEventInitializer",
-    "PendingEventCandidate",
     "SupplementExtractor",
 ]

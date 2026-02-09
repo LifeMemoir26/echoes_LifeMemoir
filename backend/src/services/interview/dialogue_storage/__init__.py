@@ -12,12 +12,16 @@ from .pendingevent import (
     UPDATE_EXPLORED,
     UPDATE_SUMMARY
 )
-from .event_supplement import EventSupplement, EventSupplementManager
-from .interview_suggestion import InterviewSuggestions, InterviewSuggestionManager
+from .eventsupplement import EventSupplementManager
+from .interviewsuggestion import InterviewSuggestionManager
 
 # 从domain导出数据类
 from ....domain.schemas.dialogue import DialogueTurn, TextChunk
-from ....domain.schemas.event import PendingEvent
+from ....domain.schemas.interview import (
+    PendingEvent,
+    EventSupplement,
+    InterviewSuggestions
+)
 
 __all__ = [
     "DialogueStorage",

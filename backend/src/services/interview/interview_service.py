@@ -24,7 +24,6 @@ from .actuator import (
     PendingEventProcesser,
     PendingEventInitializer
 )
-from .actuator.supplement_extractor import ContextInfo
 
 logger = logging.getLogger(__name__)
 

@@ -25,10 +25,17 @@ from .dialogue_storage import (
     InterviewSuggestions,
     InterviewSuggestionManager,
 )
-from .actuator.supplement_extractor import SupplementExtractor, ContextInfo
+from .actuator.supplement_extractor import SupplementExtractor
 from .actuator.summary_processer import SummaryProcesser, EventSummary
-from .actuator.pendingevent_processer import PendingEventProcesser, EventDetailExtraction
-from .actuator.pendingevent_initializer import PendingEventInitializer, PendingEventCandidate
+from .actuator.pendingevent_processer import PendingEventProcesser
+from .actuator.pendingevent_initializer import PendingEventInitializer
+
+# 从 domain 导入采访相关实体
+from ...domain.schemas.interview import (
+    ContextInfo,
+    EventDetailExtraction,
+    PendingEventCandidate
+)
 
 __all__ = [
     # Service
