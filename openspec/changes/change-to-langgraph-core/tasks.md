@@ -25,11 +25,11 @@
 
 ## 4. LangGraph 核心框架搭建
 
-- [ ] 4.1 建立 workflow 通用基类（状态、节点注册、编译入口）
-- [ ] 4.2 定义通用状态字段（`workflow_id/thread_id/status/errors/metadata`）
-- [ ] 4.3 建立 reducer 注册机制并添加缺失 reducer 保护
-- [ ] 4.4 接入 checkpointer 并支持稳定 `thread_id` 恢复
-- [ ] 4.5 定义统一错误模型映射（`error_code/failed_node/retryable/trace_id`）
+- [x] 4.1 建立 workflow 通用基类（状态、节点注册、编译入口）
+- [x] 4.2 定义通用状态字段（`workflow_id/thread_id/status/errors/metadata`）
+- [x] 4.3 建立 reducer 注册机制并添加缺失 reducer 保护
+- [x] 4.4 接入 checkpointer 并支持稳定 `thread_id` 恢复
+- [x] 4.5 定义统一错误模型映射（`error_code/failed_node/retryable/trace_id`）
 
 ## 5. Interview 工作流迁移（第一阶段）
 
