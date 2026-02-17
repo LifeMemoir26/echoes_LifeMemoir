@@ -33,12 +33,12 @@
 
 ## 5. Interview 工作流迁移（第一阶段）
 
-- [ ] 5.1 识别 interview 旧编排节点边界并形成节点列表
-- [ ] 5.2 实现 `ingest/split_or_buffer` 节点并接入状态契约
-- [ ] 5.3 实现并行节点：`summarize`、`enrich_pending_events`、`build_context`
-- [ ] 5.4 实现并行汇合 reducer，验证无覆盖冲突
-- [ ] 5.5 接入 `persist` 节点并记录失败补偿路径
-- [ ] 5.6 用旧路径样本对比新路径结果并生成差异报告
+- [x] 5.1 识别 interview 旧编排节点边界并形成节点列表
+- [x] 5.2 实现 `ingest/split_or_buffer` 节点并接入状态契约
+- [x] 5.3 实现并行节点：`summarize`、`enrich_pending_events`、`build_context`
+- [x] 5.4 实现并行汇合 reducer，验证无覆盖冲突
+- [x] 5.5 接入 `persist` 节点并记录失败补偿路径
+- [x] 5.6 用旧路径样本对比新路径结果并生成差异报告
 
 ## 6. Knowledge 与 Generate 工作流迁移（第二阶段）
 
