@@ -10,6 +10,7 @@ from ...infrastructure.database import ChunkStore
 from .generator.timeline_generator import TimelineGenerator
 from .generator.memoir_generator import MemoirGenerator
 from ...infrastructure.llm.concurrency_manager import ConcurrencyManager
+from ...application.runtime import is_langgraph_enabled
 from ...core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -505,8 +506,21 @@ async def generate_timeline(
     Returns:
         包含时间轴内容和文件路径的字典
     """
+    if is_langgraph_enabled():
+        from ...application.workflows import WorkflowFacade
+
+        facade = WorkflowFacade(username=username, verbose=verbose)
+        try:
+            return await facade.generate_timeline(
+                ratio=ratio,
+                user_preferences=user_preferences,
+                auto_save=auto_save,
+            )
+        finally:
+            facade.close()
+
     from ...infrastructure.llm.concurrency_manager import get_concurrency_manager
-    
+
     logger.info(f"开始生成时间轴: user={username}, ratio={ratio}")
     
     # 获取并发管理器
@@ -569,8 +583,21 @@ async def generate_memoir(
     Returns:
         包含回忆录内容和文件路径的字典
     """
+    if is_langgraph_enabled():
+        from ...application.workflows import WorkflowFacade
+
+        facade = WorkflowFacade(username=username, verbose=verbose)
+        try:
+            return await facade.generate_memoir(
+                target_length=target_length,
+                user_preferences=user_preferences,
+                auto_save=auto_save,
+            )
+        finally:
+            facade.close()
+
     from ...infrastructure.llm.concurrency_manager import get_concurrency_manager
-    
+
     logger.info(f"开始生成回忆录: user={username}, target_length={target_length}")
     
     # 获取并发管理器

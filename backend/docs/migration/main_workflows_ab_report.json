@@ -1,0 +1,106 @@
+{
+  "matched": true,
+  "flows": {
+    "knowledge": {
+      "matched": true,
+      "legacy": {
+        "file_name": "1.txt",
+        "text_length": 11391,
+        "kg": {
+          "narrator_name": "特朗普",
+          "chunks_count": 56,
+          "events_count": 18
+        },
+        "vec": {
+          "chunks_count": 94,
+          "summaries_count": 47,
+          "vectors_count": 47,
+          "source_file": "1.txt"
+        }
+      },
+      "langgraph": {
+        "file_name": "1.txt",
+        "text_length": 11391,
+        "kg": {
+          "narrator_name": "特朗普",
+          "chunks_count": 56,
+          "events_count": 18
+        },
+        "vec": {
+          "chunks_count": 94,
+          "summaries_count": 47,
+          "vectors_count": 47,
+          "source_file": "1.txt"
+        }
+      }
+    },
+    "generate_timeline": {
+      "matched": true,
+      "legacy": {
+        "event_count": 3,
+        "timeline": [
+          {
+            "event_id": 1,
+            "time": "2001",
+            "objective_summary": "考入大学",
+            "detailed_narrative": "我记得离开家乡"
+          },
+          {
+            "event_id": 2,
+            "time": "2009",
+            "objective_summary": "首次创业",
+            "detailed_narrative": "我记得从零开始"
+          },
+          {
+            "event_id": 3,
+            "time": "2016",
+            "objective_summary": "职业转折",
+            "detailed_narrative": "我记得进入新赛道"
+          }
+        ],
+        "username": "特朗普"
+      },
+      "langgraph": {
+        "event_count": 3,
+        "timeline": [
+          {
+            "event_id": 1,
+            "time": "2001",
+            "objective_summary": "考入大学",
+            "detailed_narrative": "我记得离开家乡"
+          },
+          {
+            "event_id": 2,
+            "time": "2009",
+            "objective_summary": "首次创业",
+            "detailed_narrative": "我记得从零开始"
+          },
+          {
+            "event_id": 3,
+            "time": "2016",
+            "objective_summary": "职业转折",
+            "detailed_narrative": "我记得进入新赛道"
+          }
+        ],
+        "username": "特朗普"
+      }
+    },
+    "generate_memoir": {
+      "matched": true,
+      "legacy": {
+        "memoir": "我的回忆录：考入大学；首次创业；职业转折",
+        "length": 20,
+        "username": "特朗普"
+      },
+      "langgraph": {
+        "memoir": "我的回忆录：考入大学；首次创业；职业转折",
+        "length": 20,
+        "username": "特朗普"
+      }
+    },
+    "interview": {
+      "matched": true,
+      "diff_count": 0
+    }
+  }
+}

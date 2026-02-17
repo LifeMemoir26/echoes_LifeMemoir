@@ -42,11 +42,11 @@
 
 ## 6. Knowledge 与 Generate 工作流迁移（第二阶段）
 
-- [ ] 6.1 迁移 knowledge 主流程到 `StateGraph`（提取/精炼/向量化）
-- [ ] 6.2 为 knowledge 流程补齐状态字段与错误分支
-- [ ] 6.3 迁移 generate 主流程到 `StateGraph`
-- [ ] 6.4 统一三条主流程的 workflow facade 调用方式
-- [ ] 6.5 完成三条主流程的新旧路径 A/B 行为对比
+- [x] 6.1 迁移 knowledge 主流程到 `StateGraph`（提取/精炼/向量化）
+- [x] 6.2 为 knowledge 流程补齐状态字段与错误分支
+- [x] 6.3 迁移 generate 主流程到 `StateGraph`
+- [x] 6.4 统一三条主流程的 workflow facade 调用方式
+- [x] 6.5 完成三条主流程的新旧路径 A/B 行为对比
 
 ## 7. LangGraph 可视化与可观测细节
 
