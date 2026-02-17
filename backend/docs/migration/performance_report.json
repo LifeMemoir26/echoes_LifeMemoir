@@ -1,0 +1,175 @@
+{
+  "baseline": {
+    "requests": 120,
+    "success": 120,
+    "errors": 0,
+    "error_rate": 0.0,
+    "throughput_rps": 1.5935,
+    "latency_ms": {
+      "avg": 627.544,
+      "p95": 807.459,
+      "max": 861.415
+    },
+    "retry_events": 0,
+    "max_inflight": 12
+  },
+  "tuning_results": [
+    {
+      "params": {
+        "concurrency_limit": 8,
+        "timeout_s": 20,
+        "max_retries": 1
+      },
+      "langgraph": {
+        "requests": 120,
+        "success": 120,
+        "errors": 0,
+        "error_rate": 0.0,
+        "throughput_rps": 2.3733,
+        "latency_ms": {
+          "avg": 421.362,
+          "p95": 573.904,
+          "max": 742.701
+        },
+        "retry_events": 0,
+        "max_inflight": 8
+      }
+    },
+    {
+      "params": {
+        "concurrency_limit": 12,
+        "timeout_s": 30,
+        "max_retries": 2
+      },
+      "langgraph": {
+        "requests": 120,
+        "success": 120,
+        "errors": 0,
+        "error_rate": 0.0,
+        "throughput_rps": 1.6404,
+        "latency_ms": {
+          "avg": 609.6,
+          "p95": 727.166,
+          "max": 743.37
+        },
+        "retry_events": 0,
+        "max_inflight": 12
+      }
+    },
+    {
+      "params": {
+        "concurrency_limit": 16,
+        "timeout_s": 40,
+        "max_retries": 3
+      },
+      "langgraph": {
+        "requests": 120,
+        "success": 120,
+        "errors": 0,
+        "error_rate": 0.0,
+        "throughput_rps": 1.1874,
+        "latency_ms": {
+          "avg": 842.19,
+          "p95": 1219.598,
+          "max": 1282.472
+        },
+        "retry_events": 0,
+        "max_inflight": 16
+      }
+    }
+  ],
+  "failure_injection": [
+    {
+      "mode": "rate_limit",
+      "rate": 0.08,
+      "langgraph": {
+        "requests": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate": 0.0,
+        "throughput_rps": 1.5809,
+        "latency_ms": {
+          "avg": 632.535,
+          "p95": 1026.251,
+          "max": 1100.74
+        },
+        "retry_events": 37,
+        "max_inflight": 12
+      }
+    },
+    {
+      "mode": "network",
+      "rate": 0.06,
+      "langgraph": {
+        "requests": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate": 0.0,
+        "throughput_rps": 1.8688,
+        "latency_ms": {
+          "avg": 535.108,
+          "p95": 804.95,
+          "max": 949.714
+        },
+        "retry_events": 32,
+        "max_inflight": 12
+      }
+    },
+    {
+      "mode": "storage_timeout",
+      "rate": 0.05,
+      "langgraph": {
+        "requests": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate": 0.0,
+        "throughput_rps": 1.7567,
+        "latency_ms": {
+          "avg": 569.25,
+          "p95": 998.592,
+          "max": 1149.445
+        },
+        "retry_events": 26,
+        "max_inflight": 12
+      }
+    }
+  ],
+  "high_concurrency_old_vs_new": {
+    "legacy": {
+      "requests": 220,
+      "success": 220,
+      "errors": 0,
+      "error_rate": 0.0,
+      "throughput_rps": 72.2604,
+      "latency_ms": {
+        "avg": 13.839,
+        "p95": 14.215,
+        "max": 14.254
+      },
+      "max_inflight": 24
+    },
+    "langgraph": {
+      "requests": 220,
+      "success": 220,
+      "errors": 0,
+      "error_rate": 0.0,
+      "throughput_rps": 0.8351,
+      "latency_ms": {
+        "avg": 1197.522,
+        "p95": 1596.284,
+        "max": 1751.609
+      },
+      "retry_events": 0,
+      "max_inflight": 24
+    }
+  },
+  "resource_usage": {
+    "cpu_time_s": 58.6324,
+    "memory_peak_mb": 16.335,
+    "memory_current_mb": 13.871,
+    "queue_depth_proxy": {
+      "legacy_max_inflight": 24,
+      "langgraph_max_inflight": 24
+    }
+  }
+}
