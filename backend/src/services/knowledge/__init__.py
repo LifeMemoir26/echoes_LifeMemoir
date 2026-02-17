@@ -6,11 +6,10 @@ from .extraction_application import LifeEventExtractor, CharacterProfileExtracto
 from .refinement_application import RefinementPipeline, EventRefiner, UncertainEventRefiner, CharacterProfileRefiner
 from .extraction_application.extraction_application import ExtractionApplication
 from .extraction_application.vector_application import  VectorApplication
-from .knowledge_service import KnowledgeService, process_knowledge_file
+from .api import process_knowledge_file
 
 __all__ = [
-    # Pipeline Service (高层编排)
-    'KnowledgeService',
+    # Workflow API
     'process_knowledge_file',
     # Application Services (中层应用服务)
     'ExtractionApplication', 

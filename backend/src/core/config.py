@@ -152,9 +152,9 @@ class GenerationConfig(BaseSettings):
 class OrchestrationConfig(BaseSettings):
     """编排引擎选择配置"""
 
-    engine: Literal["legacy", "langgraph"] = Field(
-        default="legacy",
-        description="选择执行编排路径：legacy 或 langgraph"
+    engine: Literal["langgraph"] = Field(
+        default="langgraph",
+        description="当前仅支持 langgraph 编排路径"
     )
 
     class Config:

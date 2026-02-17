@@ -1,15 +1,7 @@
 """
-业务逻辑服务层
-"""
-from .knowledge import KnowledgeService, ExtractionApplication, VectorApplication
-from .interview import InterviewService
-from .generate import GenerationTimelineService, GenerationMemoirService
+Legacy service package.
 
-__all__ = [
-    "KnowledgeService",
-    "ExtractionApplication",
-    "VectorApplication",
-    "InterviewService",
-    "GenerationTimelineService",
-    "GenerationMemoirService",
-]
+New orchestration entrypoints are in `src.application.workflows`.
+"""
+
+__all__: list[str] = []

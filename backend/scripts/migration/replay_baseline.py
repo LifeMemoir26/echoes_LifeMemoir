@@ -17,9 +17,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.services.knowledge.knowledge_service import process_knowledge_file
-from src.services.interview.interview_service import create_interview_session, add_dialogue
-from src.services.generate.generation_service import generate_timeline, generate_memoir
+from src.services.knowledge.api import process_knowledge_file
+from src.services.interview.session import create_interview_session, add_dialogue
+from src.services.generate.api import generate_timeline, generate_memoir
 from src.core.paths import get_project_root, get_data_root
 
 

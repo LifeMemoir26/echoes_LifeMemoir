@@ -19,7 +19,7 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.services.knowledge.knowledge_service import process_knowledge_file
+from src.services.knowledge.api import process_knowledge_file
 from src.core.paths import get_project_root, get_data_root
 
 

@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.application.workflows.interview import InterviewWorkflow, InterviewWorkflowRuntime, run_interview_step
 from src.domain.schemas.interview import ContextInfo, EventSupplement, InterviewSuggestions
 from src.services.interview.dialogue_storage import DialogueStorage
-from src.services.interview.interview_service import InterviewService
 
 
 @dataclass
@@ -109,19 +108,70 @@ async def _seed_pending_events(storage: DialogueStorage) -> None:
     await storage.add_pending_event(summary="职业转折", explored_content="", is_priority=False)
 
 
-async def _build_legacy_service() -> InterviewService:
-    service = InterviewService.__new__(InterviewService)
-    service.username = "parity-user"
-    service.verbose = False
-    service.data_base_dir = Path(".")
-    service.storage = _new_storage()
+class LegacyHarness:
+    """Minimal legacy-like orchestration harness for parity comparison."""
+
+    def __init__(self):
+        self.storage = _new_storage()
+        self.summary_processer = FakeSummaryProcesser()
+        self.pendingevent_processer = FakePendingEventProcesser()
+        self.supplement_extractor = FakeSupplementExtractor()
+        self.sqlite_client = FakeSQLiteClient()
+        self.vector_store = object()
+        self.chunk_store = object()
+
+    async def add_dialogue(self, *, speaker: str, content: str) -> None:
+        chunk = self.storage.add_dialogue(speaker, content)
+        if chunk is not None:
+            await self._process_chunk(chunk)
+
+    async def _process_chunk(self, chunk) -> None:
+        summaries = await self.summary_processer.extract(chunk)
+        summary_tuples = [(s.importance, s.summary) for s in summaries]
+
+        priority_events = await self.storage.get_priority_pending_events()
+        normal_events = await self.storage.get_priority_pending_events(if_non_priority=True)
+        priority_results, normal_results = (
+            await self.pendingevent_processer.extract_priority_and_normal_events(
+                chunk=chunk,
+                priority_events=priority_events,
+                normal_events=normal_events,
+            )
+        )
+        all_extractions = priority_results + normal_results
+        update_list: list[dict[str, Any]] = []
+        await self.pendingevent_processer.merge_explored_content_batch(
+            extractions=all_extractions,
+            event_storage=self.storage,
+            output_list=update_list,
+        )
+        if update_list:
+            from src.services.interview.dialogue_storage import UPDATE_EXPLORED
+
+            await self.storage.update_pending_events_batch(updates=update_list, fields=UPDATE_EXPLORED)
+
+        character_profile = self.sqlite_client.get_character_profile_text()
+        await self.supplement_extractor.generate_context_info(
+            new_summaries=summary_tuples,
+            summary_manager=self.storage.summary_manager,
+            vector_store=self.vector_store,
+            chunk_store=self.chunk_store,
+            character_profile=character_profile,
+            dialogue_storage=self.storage,
+        )
+
+    async def flush_buffer(self) -> None:
+        chunk = self.storage.flush_tmp_storage()
+        if chunk is not None:
+            await self._process_chunk(chunk)
+
+    async def get_interview_info(self) -> dict[str, Any]:
+        return await _build_info_from_storage(self.storage)
+
+
+async def _build_legacy_service() -> LegacyHarness:
+    service = LegacyHarness()
     await _seed_pending_events(service.storage)
-    service.summary_processer = FakeSummaryProcesser()
-    service.pendingevent_processer = FakePendingEventProcesser()
-    service.supplement_extractor = FakeSupplementExtractor()
-    service.sqlite_client = FakeSQLiteClient()
-    service.vector_store = object()
-    service.chunk_store = object()
     return service
 
 

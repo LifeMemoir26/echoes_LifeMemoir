@@ -10,7 +10,7 @@ import sys
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.services.interview import (
+from src.services.interview.session import (
     create_interview_session,
     add_dialogue,
     get_interview_info,
