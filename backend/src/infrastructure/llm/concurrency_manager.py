@@ -33,6 +33,7 @@ class ConcurrencyStats:
     total_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
+    cooldown_events: int = 0
     total_time: float = 0.0
     average_time: float = 0.0
 
@@ -149,6 +150,7 @@ class ConcurrencyManager:
         async with self._counter_lock:
             unlock_time = time.time() + self._cooldown_duration
             self._key_cooldown_until[key_index] = unlock_time
+            self.stats.cooldown_events += 1
             logger.warning(
                 f"🔒 API key #{key_index + 1} locked for {self._cooldown_duration}s "
                 f"(unlocks at {time.strftime('%H:%M:%S', time.localtime(unlock_time))})"
@@ -550,6 +552,27 @@ class ConcurrencyManager:
         if self.stats.total_requests > 0:
             self.stats.average_time = self.stats.total_time / self.stats.total_requests
         return self.stats
+
+    def get_runtime_snapshot(self) -> dict[str, float | int]:
+        """获取可观测运行时快照。"""
+        stats = self.get_stats()
+        avg_latency_ms = stats.average_time * 1000 if stats.average_time else 0.0
+        success_rate = (
+            stats.successful_requests / stats.total_requests
+            if stats.total_requests > 0
+            else 0.0
+        )
+        return {
+            "total_requests": stats.total_requests,
+            "successful_requests": stats.successful_requests,
+            "failed_requests": stats.failed_requests,
+            "cooldown_events": stats.cooldown_events,
+            "average_latency_ms": round(avg_latency_ms, 2),
+            "success_rate": round(success_rate, 4),
+            "in_cooldown_keys": len(self._key_cooldown_until),
+            "configured_concurrency": self.concurrency_level,
+            "key_pool_size": len(self.api_keys),
+        }
     
     async def close(self):
         """关闭所有客户端连接"""
