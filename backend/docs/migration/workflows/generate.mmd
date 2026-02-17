@@ -1,0 +1,28 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	load_data(load_data)
+	prepare_timeline(prepare_timeline)
+	load_timeline_context(load_timeline_context)
+	generate_timeline(generate_timeline)
+	prepare_memoir(prepare_memoir)
+	generate_memoir(generate_memoir)
+	finalize(finalize)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> load_data;
+	generate_memoir --> finalize;
+	generate_timeline --> finalize;
+	load_data -.-> finalize;
+	load_data -.-> prepare_memoir;
+	load_data -.-> prepare_timeline;
+	load_timeline_context --> generate_timeline;
+	prepare_memoir --> generate_memoir;
+	prepare_timeline --> load_timeline_context;
+	finalize --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

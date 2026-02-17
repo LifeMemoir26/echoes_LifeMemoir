@@ -26,10 +26,10 @@ class KnowledgeWorkflow(WorkflowBase):
 
     def build_graph(self) -> StateGraph:
         builder = StateGraph(KnowledgeWorkflowState)
-        builder.add_node("ingest", self._node_ingest)
-        builder.add_node("extract", self._node_extract)
-        builder.add_node("vectorize", self._node_vectorize)
-        builder.add_node("finalize", self._node_finalize)
+        builder.add_node("ingest", self.traced_node("ingest", self._node_ingest))
+        builder.add_node("extract", self.traced_node("extract", self._node_extract))
+        builder.add_node("vectorize", self.traced_node("vectorize", self._node_vectorize))
+        builder.add_node("finalize", self.traced_node("finalize", self._node_finalize))
 
         builder.add_edge(START, "ingest")
         builder.add_edge("ingest", "extract")

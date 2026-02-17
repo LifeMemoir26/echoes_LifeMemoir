@@ -27,12 +27,12 @@ class InterviewWorkflow(WorkflowBase):
 
     def build_graph(self) -> StateGraph:
         builder = StateGraph(InterviewWorkflowState)
-        builder.add_node("ingest", self._node_ingest)
-        builder.add_node("split_or_buffer", self._node_split_or_buffer)
-        builder.add_node("summarize", self._node_summarize)
-        builder.add_node("enrich_pending_events", self._node_enrich_pending_events)
-        builder.add_node("build_context", self._node_build_context)
-        builder.add_node("persist", self._node_persist)
+        builder.add_node("ingest", self.traced_node("ingest", self._node_ingest))
+        builder.add_node("split_or_buffer", self.traced_node("split_or_buffer", self._node_split_or_buffer))
+        builder.add_node("summarize", self.traced_node("summarize", self._node_summarize))
+        builder.add_node("enrich_pending_events", self.traced_node("enrich_pending_events", self._node_enrich_pending_events))
+        builder.add_node("build_context", self.traced_node("build_context", self._node_build_context))
+        builder.add_node("persist", self.traced_node("persist", self._node_persist))
 
         builder.add_edge(START, "ingest")
         builder.add_edge("ingest", "split_or_buffer")

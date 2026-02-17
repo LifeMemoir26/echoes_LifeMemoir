@@ -26,13 +26,13 @@ class GenerateWorkflow(WorkflowBase):
 
     def build_graph(self) -> StateGraph:
         builder = StateGraph(GenerateWorkflowState)
-        builder.add_node("load_data", self._node_load_data)
-        builder.add_node("prepare_timeline", self._node_prepare_timeline)
-        builder.add_node("load_timeline_context", self._node_load_timeline_context)
-        builder.add_node("generate_timeline", self._node_generate_timeline)
-        builder.add_node("prepare_memoir", self._node_prepare_memoir)
-        builder.add_node("generate_memoir", self._node_generate_memoir)
-        builder.add_node("finalize", self._node_finalize)
+        builder.add_node("load_data", self.traced_node("load_data", self._node_load_data))
+        builder.add_node("prepare_timeline", self.traced_node("prepare_timeline", self._node_prepare_timeline))
+        builder.add_node("load_timeline_context", self.traced_node("load_timeline_context", self._node_load_timeline_context))
+        builder.add_node("generate_timeline", self.traced_node("generate_timeline", self._node_generate_timeline))
+        builder.add_node("prepare_memoir", self.traced_node("prepare_memoir", self._node_prepare_memoir))
+        builder.add_node("generate_memoir", self.traced_node("generate_memoir", self._node_generate_memoir))
+        builder.add_node("finalize", self.traced_node("finalize", self._node_finalize))
 
         builder.add_edge(START, "load_data")
         builder.add_conditional_edges("load_data", self._route_after_load)

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import time
 from typing import Any
 
 from langgraph.graph import StateGraph
 
 from .checkpointing import create_checkpointer
 from .errors import map_exception_to_app_error
+from .tracing import record_event, summarize_payload
 
 
 class WorkflowBase(ABC):
@@ -21,6 +23,75 @@ class WorkflowBase(ABC):
     @abstractmethod
     def build_graph(self) -> StateGraph:
         """Return uncompiled StateGraph builder."""
+
+    def traced_node(self, node_name: str, handler):
+        """Wrap node handler with runtime tracing events."""
+
+        async def _wrapped(state: dict[str, Any]) -> dict[str, Any]:
+            thread_id = state.get("thread_id", "unknown-thread")
+            trace_id = state.get("trace_id", thread_id)
+            input_summary = summarize_payload(state)
+            start = time.perf_counter()
+            record_event(
+                thread_id=thread_id,
+                workflow_id=self.workflow_id,
+                node=node_name,
+                event="start",
+                trace_id=trace_id,
+                input_summary=input_summary,
+            )
+
+            try:
+                output = await handler(state)
+            except Exception as exc:
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                record_event(
+                    thread_id=thread_id,
+                    workflow_id=self.workflow_id,
+                    node=node_name,
+                    event="error",
+                    trace_id=trace_id,
+                    elapsed_ms=elapsed_ms,
+                    input_summary=input_summary,
+                    error_summary=str(exc),
+                )
+                raise
+
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            output_summary = summarize_payload(output)
+            errors = output.get("errors", []) if isinstance(output, dict) else []
+            has_error = isinstance(output, dict) and bool(errors)
+            event = "error" if has_error else "end"
+            error_summary = summarize_payload(errors[0]) if has_error else None
+            record_event(
+                thread_id=thread_id,
+                workflow_id=self.workflow_id,
+                node=node_name,
+                event=event,
+                trace_id=trace_id,
+                elapsed_ms=elapsed_ms,
+                input_summary=input_summary,
+                output_summary=output_summary,
+                error_summary=error_summary,
+            )
+            if has_error and isinstance(errors, list):
+                first = errors[0] if errors else {}
+                retryable = bool(first.get("retryable")) if isinstance(first, dict) else False
+                if retryable:
+                    record_event(
+                        thread_id=thread_id,
+                        workflow_id=self.workflow_id,
+                        node=node_name,
+                        event="retry",
+                        trace_id=trace_id,
+                        elapsed_ms=elapsed_ms,
+                        retry_count=0,
+                        input_summary=input_summary,
+                        output_summary=output_summary,
+                    )
+            return output
+
+        return _wrapped
 
     def compile(self, use_checkpointer: bool = True):
         graph = self.build_graph()

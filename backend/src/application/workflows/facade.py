@@ -11,6 +11,7 @@ from ...infrastructure.llm.concurrency_manager import (
     ConcurrencyManager,
     get_concurrency_manager,
 )
+from .core.tracing import build_node_detail_report, get_thread_trace
 from .generate import (
     GenerateWorkflow,
     GenerateWorkflowRuntime,
@@ -178,3 +179,11 @@ class WorkflowFacade:
         if self._interview_runtime is not None:
             self._interview_runtime.sqlite_client.close()
             self._interview_runtime.chunk_store.close()
+
+    def get_execution_trace(self, *, thread_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        """Query execution trace by thread_id."""
+        return get_thread_trace(thread_id, limit=limit)
+
+    def get_node_detail_report(self, *, thread_id: str) -> dict[str, Any]:
+        """Build node-level detail report by thread_id."""
+        return build_node_detail_report(thread_id)
