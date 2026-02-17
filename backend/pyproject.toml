@@ -49,6 +49,7 @@ mypy = "^1.8.0"
 
 [tool.poetry.scripts]
 process-dialogue = "scripts.process_dialogue:main"
+check-layer-deps = "scripts.check_layer_dependencies:check"
 
 [build-system]
 requires = ["poetry-core"]

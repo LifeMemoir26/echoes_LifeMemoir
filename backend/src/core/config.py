@@ -149,6 +149,18 @@ class GenerationConfig(BaseSettings):
         env_prefix = "GENERATION_"
 
 
+class OrchestrationConfig(BaseSettings):
+    """编排引擎选择配置"""
+
+    engine: Literal["legacy", "langgraph"] = Field(
+        default="legacy",
+        description="选择执行编排路径：legacy 或 langgraph"
+    )
+
+    class Config:
+        env_prefix = "ORCHESTRATION_"
+
+
 class KnowledgeExtractionSettings(BaseSettings):
     """知识提取模块总配置"""
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -156,6 +168,7 @@ class KnowledgeExtractionSettings(BaseSettings):
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     interview: InterviewAssistanceConfig = Field(default_factory=InterviewAssistanceConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
+    orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     
     # 调试模式
     debug: bool = Field(default=False, description="调试模式")
