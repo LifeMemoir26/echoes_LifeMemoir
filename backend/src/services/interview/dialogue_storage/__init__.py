@@ -12,8 +12,8 @@ from .pendingevent import (
     UPDATE_EXPLORED,
     UPDATE_SUMMARY
 )
-from .eventsupplement import EventSupplementManager
-from .interviewsuggestion import InterviewSuggestionManager
+from .event_supplement import EventSupplementManager
+from .interview_suggestion import InterviewSuggestionManager
 
 # 从domain导出数据类
 from ....domain.schemas.dialogue import DialogueTurn, TextChunk

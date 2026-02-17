@@ -10,7 +10,6 @@ from ...infrastructure.database import ChunkStore
 from .generator.timeline_generator import TimelineGenerator
 from .generator.memoir_generator import MemoirGenerator
 from ...infrastructure.llm.concurrency_manager import ConcurrencyManager
-from ...application.runtime import is_langgraph_enabled
 from ...core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -506,61 +505,17 @@ async def generate_timeline(
     Returns:
         包含时间轴内容和文件路径的字典
     """
-    if is_langgraph_enabled():
-        from ...application.workflows import WorkflowFacade
+    from ...application.workflows import WorkflowFacade
 
-        facade = WorkflowFacade(username=username, verbose=verbose)
-        try:
-            return await facade.generate_timeline(
-                ratio=ratio,
-                user_preferences=user_preferences,
-                auto_save=auto_save,
-            )
-        finally:
-            facade.close()
-
-    from ...infrastructure.llm.concurrency_manager import get_concurrency_manager
-
-    logger.info(f"开始生成时间轴: user={username}, ratio={ratio}")
-    
-    # 获取并发管理器
-    concurrency_manager = get_concurrency_manager()
-    
-    # 创建服务
-    service = GenerationTimelineService(
-        username=username,
-        concurrency_manager=concurrency_manager,
-        data_base_dir=None,  # 使用默认路径
-        verbose=verbose
-    )
-    
+    facade = WorkflowFacade(username=username, verbose=verbose)
     try:
-        # 生成时间轴（使用配置的默认语言样本数量）
-        timeline = await service.generate_timeline(
+        return await facade.generate_timeline(
             ratio=ratio,
-            language_sample_count=None,  # 使用配置默认值
-            user_preferences=user_preferences
+            user_preferences=user_preferences,
+            auto_save=auto_save,
         )
-        
-        result = {
-            'timeline': timeline,
-            'event_count': len(timeline),
-            'username': username
-        }
-        
-        # 自动保存
-        if auto_save and timeline:
-            txt_path, json_path = service.save_timeline(timeline)
-            result['txt_path'] = str(txt_path)
-            result['json_path'] = str(json_path)
-            
-            if verbose:
-                logger.info(f"时间轴已保存: {len(timeline)} 个事件")
-        
-        return result
-        
     finally:
-        service.close()
+        facade.close()
 
 
 async def generate_memoir(
@@ -583,58 +538,14 @@ async def generate_memoir(
     Returns:
         包含回忆录内容和文件路径的字典
     """
-    if is_langgraph_enabled():
-        from ...application.workflows import WorkflowFacade
+    from ...application.workflows import WorkflowFacade
 
-        facade = WorkflowFacade(username=username, verbose=verbose)
-        try:
-            return await facade.generate_memoir(
-                target_length=target_length,
-                user_preferences=user_preferences,
-                auto_save=auto_save,
-            )
-        finally:
-            facade.close()
-
-    from ...infrastructure.llm.concurrency_manager import get_concurrency_manager
-
-    logger.info(f"开始生成回忆录: user={username}, target_length={target_length}")
-    
-    # 获取并发管理器
-    concurrency_manager = get_concurrency_manager()
-    
-    # 创建服务
-    service = GenerationMemoirService(
-        username=username,
-        concurrency_manager=concurrency_manager,
-        data_base_dir=None,  # 使用默认路径
-        verbose=verbose
-    )
-    
+    facade = WorkflowFacade(username=username, verbose=verbose)
     try:
-        # 生成回忆录（使用配置的默认语言样本数量）
-        memoir_text = await service.generate_memoir(
+        return await facade.generate_memoir(
             target_length=target_length,
-            language_sample_count=None,  # 使用配置默认值
-            user_preferences=user_preferences
+            user_preferences=user_preferences,
+            auto_save=auto_save,
         )
-        
-        result = {
-            'memoir': memoir_text,
-            'length': len(memoir_text) if memoir_text else 0,
-            'username': username
-        }
-        
-        # 自动保存
-        if auto_save and memoir_text:
-            txt_path, json_path = service.save_memoir(memoir_text)
-            result['txt_path'] = str(txt_path)
-            result['json_path'] = str(json_path)
-            
-            if verbose:
-                logger.info(f"回忆录已保存: {len(memoir_text)} 字")
-        
-        return result
-        
     finally:
-        service.close()
+        facade.close()

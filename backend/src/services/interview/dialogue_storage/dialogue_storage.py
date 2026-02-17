@@ -15,8 +15,8 @@ from .pendingevent import (
     UPDATE_SUMMARY
 )
 from .summary import SummaryManager
-from .eventsupplement import EventSupplementManager
-from .interviewsuggestion import InterviewSuggestionManager
+from .event_supplement import EventSupplementManager
+from .interview_suggestion import InterviewSuggestionManager
 from ....domain.schemas.interview import EventSupplement, InterviewSuggestions
 
 if TYPE_CHECKING:

@@ -9,7 +9,6 @@ from typing import Optional, Dict, Any
 import asyncio
 
 from ...infrastructure.llm.concurrency_manager import ConcurrencyManager, get_concurrency_manager
-from ...application.runtime import is_langgraph_enabled
 from .extraction_application.extraction_application import ExtractionApplication
 from .extraction_application.vector_application import VectorApplication
 
@@ -195,26 +194,17 @@ async def process_knowledge_file(
     Returns:
         处理统计信息
     """
-    if is_langgraph_enabled():
-        from ...application.workflows import WorkflowFacade
+    from ...application.workflows import WorkflowFacade
 
-        facade = WorkflowFacade(
-            username=username,
-            data_base_dir=data_base_dir,
-            verbose=verbose,
-        )
-        try:
-            return await facade.process_knowledge_file(
-                file_path=file_path,
-                narrator_name=narrator_name,
-            )
-        finally:
-            facade.close()
-
-    pipeline = KnowledgeService(
+    facade = WorkflowFacade(
         username=username,
         data_base_dir=data_base_dir,
-        verbose=verbose
+        verbose=verbose,
     )
-
-    return await pipeline.process_file(file_path, narrator_name)
+    try:
+        return await facade.process_knowledge_file(
+            file_path=file_path,
+            narrator_name=narrator_name,
+        )
+    finally:
+        facade.close()
