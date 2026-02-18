@@ -1,0 +1,110 @@
+@import "tailwindcss";
+@import "../styles/tokens.css";
+
+:root {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-background-alt: var(--bg-alt);
+  --color-foreground: var(--fg);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-fg);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-secondary: var(--accent-2);
+
+  --font-heading: var(--font-heading);
+  --font-body: var(--font-body);
+  --font-display: var(--font-display);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  line-height: 1.65;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+body::before {
+  opacity: 0.03;
+  mix-blend-mode: overlay;
+  background-image: radial-gradient(circle at 20% 20%, #fff2 0.4px, transparent 0.5px),
+    radial-gradient(circle at 80% 80%, #fff1 0.5px, transparent 0.6px);
+  background-size: 8px 8px, 10px 10px;
+}
+
+body::after {
+  background: radial-gradient(ellipse at center, transparent 0%, transparent 50%, rgba(28, 23, 20, 0.4) 100%);
+}
+
+a {
+  color: var(--accent);
+}
+
+p {
+  margin: 0;
+}
+
+.drop-cap::first-letter {
+  float: left;
+  margin-right: 0.75rem;
+  font-family: var(--font-display);
+  font-size: 4.5rem;
+  line-height: 0.8;
+  color: var(--accent);
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.ornate-divider {
+  position: relative;
+  height: 1px;
+  width: 100%;
+  background: linear-gradient(90deg, transparent 0%, var(--border) 20%, var(--accent) 50%, var(--border) 80%, transparent 100%);
+}
+
+.ornate-divider::before {
+  content: "✶";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: var(--bg);
+  padding: 0 0.75rem;
+}
+
+.arch-top {
+  border-radius: var(--radius-arch);
+}
+
+.focus-visible-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

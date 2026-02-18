@@ -1,0 +1,27 @@
+:root {
+  --bg: #1c1714;
+  --bg-alt: #251e19;
+  --fg: #e8dfd4;
+  --muted: #3d332b;
+  --muted-fg: #9c8b7a;
+  --border: #4a3f35;
+  --accent: #c9a962;
+  --accent-2: #8b2635;
+  --accent-fg: #1c1714;
+
+  --font-heading: "Cormorant Garamond", serif;
+  --font-body: "Crimson Pro", serif;
+  --font-display: "Cinzel", serif;
+
+  --radius: 4px;
+  --radius-arch: 40% 40% 0 0 / 20% 20% 0 0;
+
+  --dur-fast: 150ms;
+  --dur-base: 300ms;
+  --dur-slow: 500ms;
+  --dur-dramatic: 700ms;
+
+  --brass-gradient: linear-gradient(180deg, #d4b872 0%, #c9a962 50%, #b8953f 100%);
+  --engraved-text: 1px 1px 1px rgba(0, 0, 0, 0.4), -1px -1px 1px rgba(255, 255, 255, 0.1);
+  --focus-ring: 0 0 0 2px #c9a962;
+}
