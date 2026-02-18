@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import React from "react";
+import type { FormEvent } from "react";
+import { useMemo, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -23,6 +25,7 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>;
 
 export function MemoirReaderPage() {
+  const inFlightRef = useRef(false);
   const { register, handleSubmit, formState } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -42,7 +45,6 @@ export function MemoirReaderPage() {
   }, [data, isPending, normalizedError]);
 
   const onSubmit = handleSubmit(async (values) => {
-    if (isPending) return;
     await mutateAsync({
       username: values.username,
       target_length: values.target_length,
@@ -50,6 +52,17 @@ export function MemoirReaderPage() {
       auto_save: true
     });
   });
+
+  const onFormSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isPending || inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      await onSubmit(event);
+    } finally {
+      inFlightRef.current = false;
+    }
+  };
 
   return (
     <main className="mx-auto min-h-screen max-w-6xl px-4 py-10 md:px-8 md:py-16">
@@ -64,7 +77,7 @@ export function MemoirReaderPage() {
       <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
         <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: "easeOut" }}>
           <Card className="mb-6">
-            <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
+            <form className="grid gap-4 md:grid-cols-2" onSubmit={onFormSubmit}>
               <label className="md:col-span-1">
                 <span className="mb-2 block font-[var(--font-display)] text-xs uppercase tracking-[0.2em] text-[var(--muted-fg)]">用户名</span>
                 <Input aria-label="用户名" {...register("username")} />

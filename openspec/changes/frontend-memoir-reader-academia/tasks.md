@@ -29,4 +29,4 @@
 - [x] 5.1 Add unit/integration tests for API envelope parsing and retryable error handling edge cases
 - [x] 5.2 Add UI tests for memoir page loading, success rendering, error rendering, and duplicate-submit prevention
 - [x] 5.3 Document frontend run/integration instructions and contract assumptions in `frontend/` docs
-- [ ] 5.4 Run final full-stack verification with Chrome DevTools (request flow, error branches, mobile viewport, accessibility spot-check)
+- [x] 5.4 Run final full-stack verification with Chrome DevTools (request flow, error branches, mobile viewport, accessibility spot-check)

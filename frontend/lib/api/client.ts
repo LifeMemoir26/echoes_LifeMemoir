@@ -1,6 +1,6 @@
 import type { ApiEnvelope, ApiError, NormalizedApiError } from "@/lib/api/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
 export class ContractError extends Error {
   constructor(message: string) {
@@ -67,9 +67,33 @@ export async function apiPost<TData, TRequest>(path: string, body: TRequest): Pr
     body: JSON.stringify(body)
   });
 
-  const json = await response.json();
+  const rawText = await response.text();
+  let json: unknown = null;
+  if (rawText) {
+    try {
+      json = JSON.parse(rawText);
+    } catch {
+      throw new ApiRequestError({
+        code: "UNKNOWN_ERROR",
+        message: `请求失败（HTTP ${response.status}）`,
+        retryable: false
+      });
+    }
+  }
 
-  const envelope = parseEnvelope<TData>(json);
+  let envelope: ApiEnvelope<TData>;
+  try {
+    envelope = parseEnvelope<TData>(json);
+  } catch (error) {
+    if (error instanceof ContractError) {
+      throw new ApiRequestError({
+        code: "CONTRACT_ERROR",
+        message: "响应结构不符合接口契约",
+        retryable: false
+      });
+    }
+    throw error;
+  }
   if (envelope.status === "success" && envelope.data) {
     return envelope.data;
   }
