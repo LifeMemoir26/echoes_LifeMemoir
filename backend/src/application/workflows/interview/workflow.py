@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
+import operator
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
 from ....application.workflows.core.base import WorkflowBase
 from ....application.workflows.core.errors import map_exception_to_app_error
+from ....application.workflows.core.reducer_registry import ReducerRegistry
 from ....domain.schemas.dialogue import TextChunk
 from ....domain.schemas.interview import ContextInfo
-from ....services.interview.dialogue_storage import UPDATE_EXPLORED
+from ....application.interview.dialogue_storage import UPDATE_EXPLORED
 from .runtime import InterviewWorkflowRuntime
 from .state import InterviewWorkflowState
 
@@ -26,6 +28,11 @@ class InterviewWorkflow(WorkflowBase):
         self.runtime = runtime
 
     def build_graph(self) -> StateGraph:
+        reducers = ReducerRegistry()
+        reducers.register("errors", operator.add)
+        reducers.register("parallel_updates", operator.add)
+        reducers.ensure(["errors", "parallel_updates"])
+
         builder = StateGraph(InterviewWorkflowState)
         builder.add_node("ingest", self.traced_node("ingest", self._node_ingest))
         builder.add_node("split_or_buffer", self.traced_node("split_or_buffer", self._node_split_or_buffer))
@@ -110,7 +117,7 @@ class InterviewWorkflow(WorkflowBase):
                     "parallel_updates": [{"node": "summarize", "action": "skip_no_chunk"}],
                 }
 
-            summaries = await self.runtime.summary_processer.extract(chunk)
+            summaries = await self.runtime.summary_processor.extract(chunk)
             summary_tuples = [(s.importance, s.summary) for s in summaries]
             return {
                 "summary_tuples": summary_tuples,
@@ -138,7 +145,7 @@ class InterviewWorkflow(WorkflowBase):
             normal_events = await self.runtime.storage.get_priority_pending_events(if_non_priority=True)
 
             priority_results, normal_results = (
-                await self.runtime.pendingevent_processer.extract_priority_and_normal_events(
+                await self.runtime.pending_event_processor.extract_priority_and_normal_events(
                     chunk=chunk,
                     priority_events=priority_events,
                     normal_events=normal_events,
@@ -147,7 +154,7 @@ class InterviewWorkflow(WorkflowBase):
             all_extractions = priority_results + normal_results
 
             update_list: list[dict[str, Any]] = []
-            merged_count = await self.runtime.pendingevent_processer.merge_explored_content_batch(
+            merged_count = await self.runtime.pending_event_processor.merge_explored_content_batch(
                 extractions=all_extractions,
                 event_storage=self.runtime.storage,
                 output_list=update_list,

@@ -7,9 +7,16 @@ application-layer workflows.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
-from ...infrastructure.llm.concurrency_manager import (
+from src.application.contracts.llm import (
+    LLMGatewayChatResponse,
+    LLMGatewayError,
+    LLMGatewayUsage,
+)
+from src.application.contracts.errors import classify_infra_exception
+from src.infra.llm.concurrency_manager import (
     ConcurrencyManager,
     get_concurrency_manager,
 )
@@ -22,31 +29,115 @@ class LLMGateway:
     def __init__(self, manager: ConcurrencyManager | None = None):
         self._manager = manager or get_concurrency_manager()
 
+    @property
+    def config(self):
+        """Expose legacy config surface for migrated callers."""
+        return self._manager.config
+
+    @property
+    def concurrency_level(self) -> int:
+        return self._manager.concurrency_level
+
     async def _with_timeout(self, coro: Any, timeout_s: float | None) -> Any:
         if timeout_s is None:
             return await coro
         return await asyncio.wait_for(coro, timeout=timeout_s)
 
-    async def chat(self, request: LLMChatRequest) -> Any:
-        """Run chat with legacy key-rotation/cooldown/retry semantics."""
-        return await self._with_timeout(
-            self._manager.chat(
-                messages=request.messages,
-                model=request.model,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-                json_mode=request.json_mode,
-                stream=request.stream,
-                top_p=request.top_p,
-                frequency_penalty=request.frequency_penalty,
-                presence_penalty=request.presence_penalty,
-                **request.extra,
-            ),
-            request.timeout_s,
-        )
+    @staticmethod
+    def _normalize_usage(raw: Any) -> LLMGatewayUsage:
+        usage = getattr(raw, "usage", None)
+        if isinstance(usage, dict):
+            return {
+                "total_tokens": usage.get("total_tokens"),
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "completion_tokens": usage.get("completion_tokens"),
+            }
 
-    async def batch_chat(self, requests: list[LLMChatRequest]) -> list[Any]:
-        """Run batched chat requests under concurrency limits."""
+        if isinstance(raw, dict):
+            dict_usage = raw.get("usage")
+            if isinstance(dict_usage, dict):
+                return {
+                    "total_tokens": dict_usage.get("total_tokens"),
+                    "prompt_tokens": dict_usage.get("prompt_tokens"),
+                    "completion_tokens": dict_usage.get("completion_tokens"),
+                }
+            return {
+                "total_tokens": raw.get("total_tokens"),
+                "prompt_tokens": raw.get("prompt_tokens"),
+                "completion_tokens": raw.get("completion_tokens"),
+            }
+
+        return {
+            "total_tokens": getattr(raw, "total_tokens", None),
+            "prompt_tokens": getattr(raw, "prompt_tokens", None),
+            "completion_tokens": getattr(raw, "completion_tokens", None),
+        }
+
+    @classmethod
+    def _normalize_chat_response(
+        cls,
+        *,
+        raw: Any,
+        latency_ms: float,
+        error: LLMGatewayError | None = None,
+    ) -> LLMGatewayChatResponse:
+        usage = cls._normalize_usage(raw)
+        content = ""
+        model = ""
+
+        if isinstance(raw, dict):
+            content = str(raw.get("content", ""))
+            model = str(raw.get("model", ""))
+        else:
+            content = str(getattr(raw, "content", ""))
+            model = str(getattr(raw, "model", ""))
+
+        return {
+            "content": content,
+            "usage": usage,
+            "model": model,
+            "latency_ms": round(latency_ms, 2),
+            "error": error,
+            "legacy_response": raw,
+            "total_tokens": usage.get("total_tokens"),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+        }
+
+    async def chat(self, request: LLMChatRequest | None = None, **kwargs: Any) -> LLMGatewayChatResponse:
+        """Run chat with legacy semantics and return standardized response."""
+        req = request if request is not None else LLMChatRequest(**kwargs)
+        start = time.perf_counter()
+        try:
+            raw = await self._with_timeout(
+                self._manager.chat(
+                    messages=req.messages,
+                    model=req.model,
+                    temperature=req.temperature,
+                    max_tokens=req.max_tokens,
+                    json_mode=req.json_mode,
+                    stream=req.stream,
+                    top_p=req.top_p,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    **req.extra,
+                ),
+                req.timeout_s,
+            )
+            latency_ms = (time.perf_counter() - start) * 1000
+            return self._normalize_chat_response(raw=raw, latency_ms=latency_ms)
+        except Exception as exc:
+            raise classify_infra_exception(exc) from exc
+
+    async def batch_chat(
+        self,
+        requests: list[LLMChatRequest | dict[str, Any]],
+    ) -> list[LLMGatewayChatResponse]:
+        """Run batched chat requests and return standardized response list."""
+        normalized: list[LLMChatRequest] = [
+            req if isinstance(req, LLMChatRequest) else LLMChatRequest(**req)
+            for req in requests
+        ]
         payload = [
             {
                 "messages": req.messages,
@@ -60,24 +151,56 @@ class LLMGateway:
                 "presence_penalty": req.presence_penalty,
                 **req.extra,
             }
-            for req in requests
+            for req in normalized
         ]
         # Timeout can be controlled per request in chat; batch uses manager defaults.
-        return await self._manager.batch_chat(payload)
+        start = time.perf_counter()
+        try:
+            raw_items = await self._manager.batch_chat(payload)
+        except Exception as exc:
+            raise classify_infra_exception(exc) from exc
 
-    async def generate_structured(self, request: LLMStructuredRequest) -> dict | list:
+        elapsed_total_ms = (time.perf_counter() - start) * 1000
+        avg_latency_ms = elapsed_total_ms / len(raw_items) if raw_items else 0.0
+        items: list[LLMGatewayChatResponse] = []
+        for raw in raw_items:
+            if isinstance(raw, Exception):
+                items.append(
+                    self._normalize_chat_response(
+                        raw={"content": "", "model": ""},
+                        latency_ms=avg_latency_ms,
+                        error={
+                            "code": type(raw).__name__,
+                            "message": str(raw),
+                            "retryable": False,
+                        },
+                    )
+                )
+                continue
+            items.append(self._normalize_chat_response(raw=raw, latency_ms=avg_latency_ms))
+        return items
+
+    async def generate_structured(
+        self,
+        request: LLMStructuredRequest | None = None,
+        **kwargs: Any,
+    ) -> dict | list:
         """Generate structured payload with repair behavior."""
-        return await self._with_timeout(
-            self._manager.generate_structured(
-                prompt=request.prompt,
-                system_prompt=request.system_prompt,
-                model=request.model,
-                temperature=request.temperature,
-                max_fix_attempts=request.max_fix_attempts,
-                **request.extra,
-            ),
-            request.timeout_s,
-        )
+        req = request if request is not None else LLMStructuredRequest(**kwargs)
+        try:
+            return await self._with_timeout(
+                self._manager.generate_structured(
+                    prompt=req.prompt,
+                    system_prompt=req.system_prompt,
+                    model=req.model,
+                    temperature=req.temperature,
+                    max_fix_attempts=req.max_fix_attempts,
+                    **req.extra,
+                ),
+                req.timeout_s,
+            )
+        except Exception as exc:
+            raise classify_infra_exception(exc) from exc
 
     def get_metrics_snapshot(self) -> dict[str, float | int]:
         """Expose runtime metrics for observability."""

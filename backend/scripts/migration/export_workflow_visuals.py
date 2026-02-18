@@ -37,7 +37,7 @@ def _build_workflows() -> dict[str, Any]:
     knowledge_runtime = KnowledgeWorkflowRuntime(
         username="viz-user",
         data_base_dir=base_dir,
-        concurrency_manager=object(),
+        llm_gateway=object(),
         extraction_service=object(),
         vector_service=object(),
     )
@@ -49,8 +49,8 @@ def _build_workflows() -> dict[str, Any]:
     interview_runtime = InterviewWorkflowRuntime(
         username="viz-user",
         storage=object(),
-        summary_processer=object(),
-        pendingevent_processer=object(),
+        summary_processor=object(),
+        pending_event_processor=object(),
         supplement_extractor=object(),
         sqlite_client=object(),
         vector_store=object(),

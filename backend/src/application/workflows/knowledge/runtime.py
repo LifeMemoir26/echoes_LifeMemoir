@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ....core.paths import get_data_root
-from ....infrastructure.llm.concurrency_manager import ConcurrencyManager
-from ....services.knowledge.extraction_application.extraction_application import (
+from src.application.contracts.llm import LLMGatewayProtocol
+from ....application.knowledge.extraction.extraction_application import (
     ExtractionApplication,
 )
-from ....services.knowledge.extraction_application.vector_application import VectorApplication
+from ....application.knowledge.extraction.vector_application import VectorApplication
 
 
 @dataclass
@@ -19,7 +19,7 @@ class KnowledgeWorkflowRuntime:
 
     username: str
     data_base_dir: Path
-    concurrency_manager: ConcurrencyManager
+    llm_gateway: LLMGatewayProtocol
     extraction_service: ExtractionApplication
     vector_service: VectorApplication
 
@@ -28,7 +28,7 @@ class KnowledgeWorkflowRuntime:
         cls,
         *,
         username: str,
-        concurrency_manager: ConcurrencyManager,
+        llm_gateway: LLMGatewayProtocol,
         data_base_dir: Path | None = None,
         verbose: bool = False,
     ) -> "KnowledgeWorkflowRuntime":
@@ -37,13 +37,13 @@ class KnowledgeWorkflowRuntime:
 
         extraction_service = ExtractionApplication(
             username=username,
-            concurrency_manager=concurrency_manager,
+            llm_gateway=llm_gateway,
             data_base_dir=data_base_dir,
             verbose=verbose,
         )
         vector_service = VectorApplication(
             username=username,
-            concurrency_manager=concurrency_manager,
+            llm_gateway=llm_gateway,
             data_root=str(data_base_dir),
             model="deepseek-v3",
         )
@@ -51,7 +51,7 @@ class KnowledgeWorkflowRuntime:
         return cls(
             username=username,
             data_base_dir=Path(data_base_dir),
-            concurrency_manager=concurrency_manager,
+            llm_gateway=llm_gateway,
             extraction_service=extraction_service,
             vector_service=vector_service,
         )

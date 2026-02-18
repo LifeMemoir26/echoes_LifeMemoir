@@ -4,20 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ....core.config import InterviewAssistanceConfig, get_settings
 from ....core.paths import get_data_root
-from ....infrastructure.database import ChunkStore, VectorStore
-from ....infrastructure.database.sqlite_client import SQLiteClient
-from ....infrastructure.llm.concurrency_manager import ConcurrencyManager
-from ....services.interview.actuator import (
-    PendingEventInitializer,
-    PendingEventProcesser,
-    SummaryProcesser,
-    SupplementExtractor,
-)
-from ....services.interview.dialogue_storage import DialogueStorage
+from ....application.interview.dialogue_storage import DialogueStorage
+
+if TYPE_CHECKING:
+    from src.application.contracts.llm import LLMGatewayProtocol
 
 
 @dataclass
@@ -26,8 +20,8 @@ class InterviewWorkflowRuntime:
 
     username: str
     storage: Any
-    summary_processer: Any
-    pendingevent_processer: Any
+    summary_processor: Any
+    pending_event_processor: Any
     supplement_extractor: Any
     sqlite_client: Any
     vector_store: Any
@@ -38,7 +32,7 @@ class InterviewWorkflowRuntime:
         cls,
         *,
         username: str,
-        concurrency_manager: ConcurrencyManager,
+        llm_gateway: LLMGatewayProtocol,
         data_base_dir: Path | None = None,
         config: InterviewAssistanceConfig | None = None,
         auto_initialize_events: bool = False,
@@ -47,36 +41,37 @@ class InterviewWorkflowRuntime:
             config = get_settings().interview
         if data_base_dir is None:
             data_base_dir = get_data_root()
+        from ....application.interview.actuator.pending_event_initializer import (
+            PendingEventInitializer,
+        )
+        from ....application.interview.actuator.pending_event_processor import (
+            PendingEventProcessor,
+        )
+        from ....application.interview.actuator.summary_processor import SummaryProcessor
+        from ....application.interview.actuator.supplement_extractor import SupplementExtractor
+        from src.infra.factories import build_interview_storage_dependencies
 
         storage = DialogueStorage(
             queue_max_size=config.dialogue_queue_size,
             storage_threshold=config.storage_threshold,
         )
-        summary_processer = SummaryProcesser(
-            concurrency_manager=concurrency_manager,
+        summary_processor = SummaryProcessor(
+            llm_gateway=llm_gateway,
             config=config,
         )
-        pendingevent_processer = PendingEventProcesser(concurrency_manager=concurrency_manager)
-        supplement_extractor = SupplementExtractor(concurrency_manager=concurrency_manager)
+        pending_event_processor = PendingEventProcessor(llm_gateway=llm_gateway)
+        supplement_extractor = SupplementExtractor(llm_gateway=llm_gateway)
 
-        sqlite_client = SQLiteClient(username=username, data_base_dir=data_base_dir)
-
-        user_data_dir = Path(data_base_dir) / username
-        chroma_dir = user_data_dir / "chromadb"
-        import hashlib
-
-        safe_name = hashlib.md5(username.encode("utf-8")).hexdigest()[:8]
-        vector_store = VectorStore(
-            persist_directory=str(chroma_dir),
-            collection_name=f"user_{safe_name}_summaries",
+        sqlite_client, vector_store, chunk_store = build_interview_storage_dependencies(
+            username=username,
+            data_base_dir=Path(data_base_dir),
         )
-        chunk_store = ChunkStore(username=username, data_base_dir=data_base_dir)
 
         runtime = cls(
             username=username,
             storage=storage,
-            summary_processer=summary_processer,
-            pendingevent_processer=pendingevent_processer,
+            summary_processor=summary_processor,
+            pending_event_processor=pending_event_processor,
             supplement_extractor=supplement_extractor,
             sqlite_client=sqlite_client,
             vector_store=vector_store,
@@ -85,7 +80,7 @@ class InterviewWorkflowRuntime:
 
         if auto_initialize_events:
             initializer = PendingEventInitializer(
-                concurrency_manager=concurrency_manager,
+                llm_gateway=llm_gateway,
                 sqlite_client=sqlite_client,
                 vector_store=vector_store,
                 config=config,

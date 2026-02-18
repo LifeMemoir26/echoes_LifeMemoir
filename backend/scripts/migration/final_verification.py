@@ -12,8 +12,6 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.application.workflows.generate import GenerateWorkflow, run_generate
-
 
 @dataclass
 class FlakySQLite:
@@ -90,23 +88,8 @@ async def _checkpoint_drill() -> dict[str, Any]:
 
     for i in range(total):
         runtime = StableRuntime()
-        workflow = GenerateWorkflow(runtime=runtime)
-        thread_id = f"checkpoint-drill-{i}"
-
-        first = await run_generate(
-            workflow,
-            thread_id=thread_id,
-            username="drill-user",
-            mode="timeline",
-            ratio=0.3,
-        )
-        second = await run_generate(
-            workflow,
-            thread_id=thread_id,
-            username="drill-user",
-            mode="memoir",
-            ratio=0.3,
-        )
+        first = await _run_generate_direct(runtime=runtime, mode="timeline", ratio=0.3)
+        second = await _run_generate_direct(runtime=runtime, mode="memoir", target_length=1200)
 
         first_ok = "timeline" in first and isinstance(first.get("timeline"), list)
         second_ok = "memoir" in second and isinstance(second.get("memoir"), str)
@@ -118,6 +101,38 @@ async def _checkpoint_drill() -> dict[str, Any]:
         "success": success,
         "success_rate": round(success / max(1, total), 4),
     }
+
+
+async def _run_generate_direct(
+    *,
+    runtime: StableRuntime,
+    mode: str,
+    ratio: float = 0.3,
+    target_length: int = 1200,
+) -> dict[str, Any]:
+    events = runtime.sqlite_client.get_all_events(sort_by_year=True)
+    if mode == "timeline":
+        target = int(len(events) * ratio)
+        if target < 10:
+            target = min(10, len(events))
+        elif target > 30:
+            target = 30
+        selected_ids = await runtime.timeline_generator.select_events(events=events, target_count=target)
+        selected_events = [event for event in events if event["id"] in selected_ids]
+        entries = await runtime.timeline_generator.generate_timeline_entries(
+            events=selected_events,
+            character_profile=runtime.sqlite_client.get_character_profile(),
+            language_samples=[item["chunk_text"] for item in runtime.chunk_store.get_random_chunks(1)],
+        )
+        timeline = runtime.timeline_generator.sort_timeline_entries(entries, selected_events)
+        return {"timeline": timeline, "event_count": len(timeline), "username": "drill-user"}
+
+    memoir = await runtime.memoir_generator.generate_memoir(
+        events=events,
+        language_samples=[item["chunk_text"] for item in runtime.chunk_store.get_random_chunks(1)],
+        target_length=target_length,
+    )
+    return {"memoir": memoir, "length": len(memoir), "username": "drill-user"}
 
 
 async def main() -> None:

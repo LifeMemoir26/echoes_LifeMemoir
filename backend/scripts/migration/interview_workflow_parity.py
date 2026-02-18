@@ -12,9 +12,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.application.workflows.interview import InterviewWorkflow, InterviewWorkflowRuntime, run_interview_step
+from src.application.workflows.interview import InterviewWorkflow, InterviewWorkflowRuntime
 from src.domain.schemas.interview import ContextInfo, EventSupplement, InterviewSuggestions
-from src.services.interview.dialogue_storage import DialogueStorage
+from src.application.interview.dialogue_storage import DialogueStorage
 
 
 @dataclass
@@ -23,14 +23,14 @@ class _FakeSummary:
     summary: str
 
 
-class FakeSummaryProcesser:
+class FakeSummaryProcessor:
     async def extract(self, chunk) -> list[_FakeSummary]:
         text = chunk.content.replace("\n", " ").strip()
         base = text[:36] if text else "空内容"
         return [_FakeSummary(importance=5, summary=f"总结:{base}"), _FakeSummary(importance=3, summary="总结:补充细节")]
 
 
-class FakePendingEventProcesser:
+class FakePendingEventProcessor:
     async def extract_priority_and_normal_events(self, chunk, priority_events, normal_events):
         extracted_priority = [
             {"event_id": e.id, "details": f"优先补充:{chunk.total_chars}"} for e in priority_events
@@ -113,8 +113,8 @@ class LegacyHarness:
 
     def __init__(self):
         self.storage = _new_storage()
-        self.summary_processer = FakeSummaryProcesser()
-        self.pendingevent_processer = FakePendingEventProcesser()
+        self.summary_processor = FakeSummaryProcessor()
+        self.pending_event_processor = FakePendingEventProcessor()
         self.supplement_extractor = FakeSupplementExtractor()
         self.sqlite_client = FakeSQLiteClient()
         self.vector_store = object()
@@ -126,13 +126,13 @@ class LegacyHarness:
             await self._process_chunk(chunk)
 
     async def _process_chunk(self, chunk) -> None:
-        summaries = await self.summary_processer.extract(chunk)
+        summaries = await self.summary_processor.extract(chunk)
         summary_tuples = [(s.importance, s.summary) for s in summaries]
 
         priority_events = await self.storage.get_priority_pending_events()
         normal_events = await self.storage.get_priority_pending_events(if_non_priority=True)
         priority_results, normal_results = (
-            await self.pendingevent_processer.extract_priority_and_normal_events(
+            await self.pending_event_processor.extract_priority_and_normal_events(
                 chunk=chunk,
                 priority_events=priority_events,
                 normal_events=normal_events,
@@ -140,13 +140,13 @@ class LegacyHarness:
         )
         all_extractions = priority_results + normal_results
         update_list: list[dict[str, Any]] = []
-        await self.pendingevent_processer.merge_explored_content_batch(
+        await self.pending_event_processor.merge_explored_content_batch(
             extractions=all_extractions,
             event_storage=self.storage,
             output_list=update_list,
         )
         if update_list:
-            from src.services.interview.dialogue_storage import UPDATE_EXPLORED
+            from src.application.interview.dialogue_storage import UPDATE_EXPLORED
 
             await self.storage.update_pending_events_batch(updates=update_list, fields=UPDATE_EXPLORED)
 
@@ -181,8 +181,8 @@ async def _build_langgraph_workflow() -> tuple[InterviewWorkflow, InterviewWorkf
     runtime = InterviewWorkflowRuntime(
         username="parity-user",
         storage=storage,
-        summary_processer=FakeSummaryProcesser(),
-        pendingevent_processer=FakePendingEventProcesser(),
+        summary_processor=FakeSummaryProcessor(),
+        pending_event_processor=FakePendingEventProcessor(),
         supplement_extractor=FakeSupplementExtractor(),
         sqlite_client=FakeSQLiteClient(),
         vector_store=object(),
@@ -241,7 +241,7 @@ async def run_parity(samples_path: Path, output_path: Path) -> dict[str, Any]:
 
     for speaker, content in dialogues:
         await legacy.add_dialogue(speaker=speaker, content=content)
-        await run_interview_step(
+        await _run_interview_step_direct(
             workflow,
             thread_id="parity-thread",
             speaker=speaker,
@@ -249,7 +249,7 @@ async def run_parity(samples_path: Path, output_path: Path) -> dict[str, Any]:
         )
 
     await legacy.flush_buffer()
-    await run_interview_step(workflow, thread_id="parity-thread", flush=True)
+    await _run_interview_step_direct(workflow, thread_id="parity-thread", flush=True)
 
     legacy_info = await legacy.get_interview_info()
     langgraph_info = await _build_info_from_storage(runtime.storage)
@@ -280,6 +280,41 @@ async def run_parity(samples_path: Path, output_path: Path) -> dict[str, Any]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
+
+
+async def _run_interview_step_direct(
+    workflow: InterviewWorkflow,
+    *,
+    thread_id: str,
+    speaker: str | None = None,
+    content: str | None = None,
+    flush: bool = False,
+) -> dict[str, Any]:
+    """Execute the interview workflow path directly for deterministic parity checks."""
+
+    state: dict[str, Any] = {
+        "workflow_id": workflow.workflow_id,
+        "thread_id": thread_id,
+        "status": "received",
+        "errors": [],
+        "metadata": {},
+        "parallel_updates": [],
+        "speaker": speaker or "",
+        "content": content or "",
+        "timestamp": None,
+        "flush": flush,
+        "trace_id": thread_id,
+    }
+    state.update(await workflow._node_ingest(state))
+    state.update(await workflow._node_split_or_buffer(state))
+    if workflow._route_after_split(state) == "__end__":
+        return state
+
+    state.update(await workflow._node_summarize(state))
+    state.update(await workflow._node_enrich_pending_events(state))
+    state.update(await workflow._node_build_context(state))
+    state.update(await workflow._node_persist(state))
+    return state
 
 
 async def main() -> None:

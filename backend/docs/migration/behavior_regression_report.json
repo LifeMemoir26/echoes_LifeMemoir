@@ -1,7 +1,0 @@
-{
-  "api_contract_regression": {
-    "matched": true,
-    "command": "python3 backend/scripts/migration/main_workflows_ab_parity.py",
-    "stdout": "main-workflows matched=True\nreport=/home/rowan/Study/CodeProject/Project/echoes_LifeMemoir/backend/docs/migration/main_workflows_ab_report.json"
-  }
-}

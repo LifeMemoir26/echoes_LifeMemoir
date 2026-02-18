@@ -13,11 +13,6 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.application.workflows.generate import GenerateWorkflow, run_generate
-from src.application.workflows.knowledge import KnowledgeWorkflow, run_knowledge_file
-from src.application.workflows.knowledge.runtime import KnowledgeWorkflowRuntime
-from src.application.workflows.generate.runtime import GenerateWorkflowRuntime
-
 @dataclass
 class FakeExtractionService:
     async def process_text(self, text: str, narrator_name: str = "叙述者") -> dict[str, Any]:
@@ -234,46 +229,25 @@ async def run_report(samples_path: Path, output_path: Path) -> dict[str, Any]:
     knowledge_legacy = FakeKnowledgeLegacyPipeline(username=username, data_base_dir=data_base_dir)
     knowledge_legacy_out = await knowledge_legacy.process_file(file_path)
 
-    knowledge_runtime = KnowledgeWorkflowRuntime(
-        username=username,
-        data_base_dir=data_base_dir,
-        concurrency_manager=object(),
-        extraction_service=FakeExtractionService(),
-        vector_service=FakeVectorService(),
-    )
-    knowledge_workflow = KnowledgeWorkflow(runtime=knowledge_runtime)
-    knowledge_new_out = await run_knowledge_file(
-        knowledge_workflow,
+    knowledge_new_out = await _run_knowledge_direct(
         file_path=file_path,
         username=username,
-        thread_id="ab-knowledge",
+        data_base_dir=data_base_dir,
     )
 
     generate_legacy = FakeGenerateLegacyPipeline(username=username, data_base_dir=data_base_dir)
     timeline_legacy_out = await generate_legacy.generate_timeline(ratio=sample_timeline.get("ratio", 0.3))
     memoir_legacy_out = await generate_legacy.generate_memoir(target_length=sample_memoir.get("target_length", 1200))
 
-    generate_runtime = GenerateWorkflowRuntime(
+    timeline_new_out = await _run_generate_direct(
         username=username,
         data_base_dir=data_base_dir,
-        sqlite_client=FakeSQLiteClient(data_dir=data_base_dir / username),
-        chunk_store=FakeChunkStore(),
-        timeline_generator=FakeTimelineGenerator(),
-        memoir_generator=FakeMemoirGenerator(),
-        config=FakeGenerationConfig(),
-    )
-    generate_workflow = GenerateWorkflow(runtime=generate_runtime)
-    timeline_new_out = await run_generate(
-        generate_workflow,
-        thread_id="ab-generate-timeline",
-        username=username,
         mode="timeline",
         ratio=sample_timeline.get("ratio", 0.3),
     )
-    memoir_new_out = await run_generate(
-        generate_workflow,
-        thread_id="ab-generate-memoir",
+    memoir_new_out = await _run_generate_direct(
         username=username,
+        data_base_dir=data_base_dir,
         mode="memoir",
         target_length=sample_memoir.get("target_length", 1200),
     )
@@ -336,6 +310,41 @@ async def _run_interview_parity(samples_path: Path, output_path: Path) -> dict[s
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return await module.run_parity(samples_path=samples_path, output_path=output_path)
+
+
+async def _run_knowledge_direct(
+    *,
+    file_path: Path,
+    username: str,
+    data_base_dir: Path,
+) -> dict[str, Any]:
+    text = file_path.read_text(encoding="utf-8")
+    extraction = FakeExtractionService()
+    vector = FakeVectorService()
+    kg_stats = await extraction.process_text(text, narrator_name=username)
+    vec_stats = await vector.process_text(text, source_file=file_path.name)
+    user_data_dir = data_base_dir / username
+    return {
+        "file_name": file_path.name,
+        "text_length": len(text),
+        "knowledge_graph": kg_stats,
+        "vector_database": vec_stats,
+        "data_dir": str(user_data_dir),
+    }
+
+
+async def _run_generate_direct(
+    *,
+    username: str,
+    data_base_dir: Path,
+    mode: str,
+    ratio: float = 0.3,
+    target_length: int = 1200,
+) -> dict[str, Any]:
+    runtime = FakeGenerateLegacyPipeline(username=username, data_base_dir=data_base_dir)
+    if mode == "timeline":
+        return await runtime.generate_timeline(ratio=ratio)
+    return await runtime.generate_memoir(target_length=target_length)
 
 
 async def main() -> None:

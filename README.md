@@ -55,3 +55,20 @@ python backend/scripts/run_pipeline.py
 ## 4. 验证结果
 
 脚本运行结束后，请检查 `data/` 目录下的生成文件和`.log/`目录下的日志文件，以确认处理是否成功完成。
+
+## 5. 文档与测试目录规范
+
+- 后端架构与迁移文档统一放在 `backend/docs/`（按主题子目录组织）。
+- 自动化测试统一放在 `backend/tests/`，通过 pytest 自动发现执行。
+- `backend/scripts/` 仅保留工具/运维脚本，不放测试用例。
+
+常用命令：
+
+```bash
+# 运行后端测试
+cd backend
+pytest -q tests
+
+# 运行分层依赖检查
+python scripts/check_layer_dependencies.py
+```

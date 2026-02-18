@@ -105,6 +105,22 @@ class WorkflowBase(ABC):
         if self._compiled is None:
             self.compile(use_checkpointer=True)
 
+        state_thread_id = initial_state.get("thread_id")
+        if isinstance(state_thread_id, str) and state_thread_id != thread_id:
+            trace_id = initial_state.get("trace_id", thread_id)
+            app_error = map_exception_to_app_error(
+                ValueError("thread_id mismatch between state and invoke config"),
+                trace_id=trace_id,
+                failed_node=initial_state.get("failed_node", "workflow_entry"),
+                error_code="WORKFLOW_THREAD_MISMATCH",
+            )
+            return {
+                **initial_state,
+                "status": "failed",
+                "failed_node": "workflow_entry",
+                "errors": [app_error.model_dump()],
+            }
+
         config = {"configurable": {"thread_id": thread_id}}
         try:
             return await self._compiled.ainvoke(initial_state, config=config)
