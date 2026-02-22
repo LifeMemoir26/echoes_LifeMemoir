@@ -48,10 +48,12 @@ class SQLiteClient:
             # 连接到SQLite数据库
             self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self.conn.row_factory = sqlite3.Row  # 使结果可以像字典一样访问
-            
+
             # 创建表
             self._create_tables()
-            
+            # 幂等迁移（为已有数据库补充新字段）
+            self._migrate_schema()
+
             logger.info(f"SQLite客户端已连接: 数据库={self.db_path}")
         except Exception as e:
             logger.error(f"SQLite连接失败: {e}")
@@ -99,9 +101,47 @@ class SQLiteClient:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_year ON life_events(year)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_summary ON life_events(event_summary)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_aliases_main_name ON aliases(main_name)")
-        
+
+        # materials 表：追踪所有上传的原始材料
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS materials (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                material_type TEXT NOT NULL,
+                material_context TEXT DEFAULT '',
+                file_path TEXT,
+                file_size INTEGER,
+                status TEXT DEFAULT 'pending',
+                events_count INTEGER DEFAULT 0,
+                chunks_count INTEGER DEFAULT 0,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP
+            )
+        """)
+
         self.conn.commit()
         logger.debug("SQLite表和索引创建完成")
+
+    def _migrate_schema(self):
+        """幂等地为已有数据库补充新字段（ADD COLUMN IF NOT EXISTS 语义）"""
+        cursor = self.conn.cursor()
+        migrations = [
+            "ALTER TABLE life_events ADD COLUMN life_stage TEXT DEFAULT '未知'",
+            "ALTER TABLE life_events ADD COLUMN event_category TEXT DEFAULT '[]'",
+            "ALTER TABLE life_events ADD COLUMN confidence TEXT DEFAULT 'high'",
+            "ALTER TABLE life_events ADD COLUMN source_material_id TEXT",
+            "ALTER TABLE character_profiles ADD COLUMN source_material_id TEXT",
+        ]
+        for stmt in migrations:
+            try:
+                cursor.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" in str(e).lower():
+                    pass  # 已存在，忽略
+                else:
+                    raise
+        self.conn.commit()
+        logger.debug("Schema 迁移完成")
     
     def insert_events(self, events: List[Dict[str, Any]]) -> int:
         """
@@ -121,15 +161,20 @@ class SQLiteClient:
         
         for event in events:
             cursor.execute("""
-                INSERT OR REPLACE INTO life_events 
-                (year, time_detail, event_summary, event_details, is_merged)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO life_events
+                (year, time_detail, event_summary, event_details, is_merged,
+                 life_stage, event_category, confidence, source_material_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 event.get('year'),
                 event.get('time_detail'),
                 event.get('event_summary'),
                 event.get('event_details', ''),
-                event.get('is_merged', False)
+                event.get('is_merged', False),
+                event.get('life_stage', '未知'),
+                event.get('event_category', '[]'),
+                event.get('confidence', 'high'),
+                event.get('source_material_id'),
             ))
             count += 1
         
@@ -371,6 +416,51 @@ class SQLiteClient:
         self.conn.commit()
         logger.warning(f"已清空用户 {self.username} 的所有数据")
     
+    def get_all_materials(self) -> List[Dict[str, Any]]:
+        """返回该用户所有 materials 记录，按 uploaded_at 降序"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM materials ORDER BY uploaded_at DESC")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def insert_material(
+        self,
+        material_id: str,
+        filename: str,
+        material_type: str,
+        material_context: str = "",
+        file_path: str = "",
+        file_size: int = 0,
+    ) -> None:
+        """插入新的 material 记录，初始状态为 processing"""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO materials (id, filename, material_type, material_context, file_path, file_size, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'processing')
+            """,
+            (material_id, filename, material_type, material_context, file_path, file_size),
+        )
+        self.conn.commit()
+
+    def update_material_status(
+        self,
+        material_id: str,
+        status: str,
+        events_count: int = 0,
+        chunks_count: int = 0,
+    ) -> None:
+        """更新 material 处理状态及统计数据"""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE materials
+            SET status = ?, events_count = ?, chunks_count = ?, processed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (status, events_count, chunks_count, material_id),
+        )
+        self.conn.commit()
+
     def close(self):
         """关闭数据库连接"""
         if hasattr(self, 'conn'):

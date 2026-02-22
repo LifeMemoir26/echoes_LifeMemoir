@@ -75,6 +75,14 @@ class SessionRegistry:
                 record.touch()
             return record
 
+    async def get_active_by_username(self, username: str) -> SessionRecord | None:
+        async with self._lock:
+            record = self._by_username.get(username)
+            if record and record.active:
+                record.touch()
+                return record
+            return None
+
     async def close(self, session_id: str) -> SessionRecord | None:
         async with self._lock:
             record = self._by_session_id.get(session_id)

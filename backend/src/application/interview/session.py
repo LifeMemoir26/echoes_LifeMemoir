@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from ...core.config import InterviewAssistanceConfig
@@ -15,6 +16,8 @@ from ...application.workflows.interview import (
     InterviewWorkflowRuntime,
     run_interview_step,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,6 +77,7 @@ class InterviewSession:
                     "summary": event.summary,
                     "is_priority": event.is_priority,
                     "explored_length": len(event.explored_content),
+                    "explored_content": event.explored_content[:500],
                 }
                 for event in all_events
             ],
@@ -114,24 +118,39 @@ async def create_interview_session(
         auto_initialize_events=True,
     )
 
-    initializer = getattr(runtime, "_initializer", None)
-    if initializer is not None:
-        candidates = await initializer.initialize_pending_events()
-        for candidate in candidates:
-            await runtime.storage.add_pending_event(
-                summary=candidate.summary,
-                explored_content="",
-                is_priority=candidate.is_priority,
-            )
-
     workflow = InterviewWorkflow(runtime=runtime)
     thread_id = f"interview-{uuid.uuid4().hex[:12]}"
-    return InterviewSession(
+    session = InterviewSession(
         username=username,
         workflow=workflow,
         runtime=runtime,
         thread_id=thread_id,
     )
+
+    initializer = getattr(runtime, "_initializer", None)
+    if initializer is not None:
+        asyncio.create_task(_bootstrap_pending_events(session))
+
+    return session
+
+
+async def _bootstrap_pending_events(session: InterviewSession) -> None:
+    initializer = getattr(session.runtime, "_initializer", None)
+    if initializer is None:
+        return
+
+    try:
+        candidates = await asyncio.wait_for(initializer.initialize_pending_events(), timeout=20)
+        for candidate in candidates:
+            await session.runtime.storage.add_pending_event(
+                summary=candidate.summary,
+                explored_content="",
+                is_priority=candidate.is_priority,
+            )
+    except asyncio.TimeoutError:
+        logger.warning("pending event bootstrap timed out for interview session %s", session.thread_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending event bootstrap failed for interview session %s: %s", session.thread_id, exc)
 
 
 async def add_dialogue(

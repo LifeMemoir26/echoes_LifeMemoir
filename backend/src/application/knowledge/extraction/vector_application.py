@@ -1,11 +1,11 @@
 """
 向量数据库构建服务
-完整流程：文本切分 → 摘要提取 → SQLite存储 → ChromaDB向量编码
+完整流程：文本切分 → 摘要提取 → SQLite存储 → sqlite-vec 向量编码
 """
 
 import logging
 import gc
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from src.infra.utils.text_splitter import TextSplitter, SplitterMode
@@ -19,72 +19,65 @@ logger = logging.getLogger(__name__)
 class VectorApplication:
     """
     向量数据库构建应用
-    
+
     工作流程：
     1. 使用1000字窗口/900字滑动切分文本
     2. 加载别名对应表
     3. 并发调用LLM提取每个chunk的摘要
     4. 将chunks存入SQLite
-    5. 将摘要编码后存入ChromaDB
+    5. 将摘要编码后存入 sqlite-vec（通过注入的 VectorStore）
     6. 建立chunk_id → summary_vector_ids映射
     """
-    
+
     def __init__(
         self,
         username: str,
         llm_gateway: LLMGatewayProtocol,
+        vector_store: VectorStore,
         data_root: str = "./.data",
         model: str = "claude-3.7-sonnet"
     ):
         """
         初始化Pipeline
-        
+
         Args:
             username: 用户名
             llm_gateway: 全局 LLM 运行时网关（支持系统提示词分离）
-            data_root: 数据根目录
+            vector_store: 注入的 VectorStore 实例（由 runtime 创建，含 GeminiEmbedder）
+            data_root: 数据根目录（用于 AliasStore 路径）
             model: LLM模型名称
         """
         self.username = username
         self.concurrency_manager = llm_gateway
         self.model = model
-        
+
         # 从配置读取batch_size
         from ....core.config import EmbeddingConfig
         embedding_config = EmbeddingConfig()
         self.batch_size = embedding_config.batch_size
-        
+
         # 初始化组件
         data_path = Path(data_root) / username
         data_path.mkdir(parents=True, exist_ok=True)
-        
+
         # 文本切分器（向量构建模式：1000字窗口，900字滑动）
         self.splitter = TextSplitter(mode=SplitterMode.VECTOR_BUILDING)
-        
+
         # 别名存储（从阶段1的database.db读取别名）
         alias_db_path = data_path / "database.db"
         self.alias_manager = AliasStore(str(alias_db_path))
-        
+
         # 摘要提取器（使用ConcurrencyManager支持系统提示词分离）
         self.summary_extractor = EventSummaryExtractor(
             concurrency_manager=llm_gateway,
             model=model
         )
-        
-        # Chunk存储
-        chunk_db_path = data_path 
-        self.chunk_store = ChunkStore(str(chunk_db_path))
-        
-        # 向量存储（collection名称必须是ASCII字符）
-        vector_persist_dir = str(data_path / "chromadb")
-        # 使用安全的collection名称（将中文转为拼音或hash）
-        import hashlib
-        safe_name = hashlib.md5(username.encode('utf-8')).hexdigest()[:8]
-        self.vector_store = VectorStore(
-            persist_directory=vector_persist_dir,
-            collection_name=f"user_{safe_name}_summaries"
-        )
-        
+
+        # 注入的向量存储（sqlite-vec + GeminiEmbedder）
+        self.vector_store = vector_store
+        # Chunk存储来自 VectorStore 的内部 ChunkStore
+        self.chunk_store: ChunkStore = vector_store.chunk_store
+
         logger.info(
             f"VectorApplication已初始化 - 用户: {username}, "
             f"模型: {model}, 批次大小: {self.batch_size}"
@@ -175,8 +168,8 @@ class VectorApplication:
         vector_count_result: Dict[str, int]
     ):
         """
-        消费者：从队列取摘要 → 累积到batch_size → 批量编码存ChromaDB
-        
+        消费者：从队列取摘要 → 累积到batch_size → 批量编码存 sqlite-vec
+
         Args:
             summary_queue: 摘要数据队列
             vector_count_result: 已编码向量计数（引用传递）
@@ -283,8 +276,8 @@ class VectorApplication:
         vector_id_mapping: Dict[int, str]
     ):
         """
-        编码一批摘要并存入ChromaDB
-        
+        编码一批摘要并存入 sqlite-vec（通过 VectorStore.add_documents）
+
         Args:
             batch: 摘要数据列表 [{"summary_id": int, "chunk_id": int, "text": str}, ...]
             vector_id_mapping: vector_id映射字典（会被更新）
@@ -304,7 +297,7 @@ class VectorApplication:
             for item in batch
         ]
         
-        # 添加到ChromaDB
+        # 添加到向量存储（GeminiEmbedder + sqlite-vec）
         self.vector_store.add_documents(
             documents=texts,
             ids=ids,
@@ -316,21 +309,21 @@ class VectorApplication:
             vector_id_mapping[item["summary_id"]] = vector_id
     
     def search_similar(
-        self, 
-        query: str, 
+        self,
+        query: str,
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
         搜索相似摘要
-        
+
         Args:
             query: 查询文本
             top_k: 返回前K个结果
-            
+
         Returns:
             搜索结果列表，包含原始chunk
         """
-        # 从ChromaDB搜索
+        # 从向量存储搜索（sqlite-vec 混合检索）
         results = self.vector_store.search(query=query, top_k=top_k)
         
         # 补充原始chunk信息
@@ -355,8 +348,7 @@ class VectorApplication:
         return enriched_results
     
     def close(self):
-        """关闭所有连接"""
-        self.chunk_store.close()
+        """关闭所有连接（ChunkStore 由注入的 VectorStore 管理，此处不重复关闭）"""
         logger.info("VectorApplication已关闭")
 
 

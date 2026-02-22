@@ -98,3 +98,99 @@ class SseEventPayload(BaseModel):
     session_id: str
     trace_id: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+# ------------------------------------------------------------------
+# Auth models
+# ------------------------------------------------------------------
+
+
+class RegisterData(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(default="")
+
+
+class LoginData(BaseModel):
+    username: str = Field(default="")
+    password: str = Field(default="")
+    access_token: str = Field(default="")
+    token_type: str = Field(default="bearer")
+
+
+# ------------------------------------------------------------------
+# Knowledge browser models
+# ------------------------------------------------------------------
+
+
+class RecordItem(BaseModel):
+    chunk_id: int
+    chunk_source: str | None = None
+    preview: str
+    total_chars: int
+    chunk_index: int
+    created_at: str
+    is_structured: bool
+
+
+class RecordsListData(BaseModel):
+    records: list[RecordItem]
+
+
+class EventItem(BaseModel):
+    id: int
+    year: str
+    time_detail: str | None = None
+    event_summary: str
+    event_details: str | None = None
+    is_merged: bool
+    created_at: str
+    life_stage: str | None = None
+    event_category: list[str] = Field(default_factory=list)
+    confidence: str | None = None
+    source_material_id: str | None = None
+
+
+class EventsListData(BaseModel):
+    events: list[EventItem]
+
+
+class ProfileData(BaseModel):
+    personality: str
+    worldview: str
+
+
+# ------------------------------------------------------------------
+# Material upload models
+# ------------------------------------------------------------------
+
+
+class MaterialItem(BaseModel):
+    id: str
+    filename: str
+    material_type: str
+    material_context: str = ""
+    file_path: str | None = None
+    file_size: int = 0
+    status: str
+    events_count: int = 0
+    chunks_count: int = 0
+    uploaded_at: str
+    processed_at: str | None = None
+
+
+class MaterialsListData(BaseModel):
+    materials: list[MaterialItem]
+
+
+class MaterialUploadItem(BaseModel):
+    file_name: str
+    status: str                  # "success" | "error"
+    material_id: str | None = None
+    events_count: int = 0
+    error_message: str | None = None
+
+
+class MaterialUploadData(BaseModel):
+    items: list[MaterialUploadItem]
+    total_files: int
+    success_count: int

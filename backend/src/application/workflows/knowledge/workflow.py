@@ -66,6 +66,8 @@ class KnowledgeWorkflow(WorkflowBase):
             kg_stats = await self.runtime.extraction_service.process_text(
                 state.get("text", ""),
                 narrator_name=narrator,
+                material_type=state.get("material_type", "interview"),
+                material_context=state.get("material_context", ""),
             )
             return {
                 "status": "knowledge_extracted",
@@ -99,6 +101,23 @@ class KnowledgeWorkflow(WorkflowBase):
         metadata = dict(state.get("metadata", {}))
         metadata.pop("stage_start_ts", None)
 
+        # 若 state 含 material_id，更新 materials 表状态
+        material_id = state.get("material_id")
+        if material_id:
+            try:
+                kg_stats = state.get("knowledge_graph", {})
+                vec_stats = state.get("vector_database", {})
+                events_count = kg_stats.get("events_count", 0)
+                chunks_count = vec_stats.get("chunks_count", 0)
+                self.runtime.sqlite_client.update_material_status(
+                    material_id=material_id,
+                    status="done",
+                    events_count=events_count,
+                    chunks_count=chunks_count,
+                )
+            except Exception as exc:
+                logger.warning("更新 material 状态失败: %s", exc)
+
         return {
             "status": "completed",
             "total_time": total_time,
@@ -130,6 +149,9 @@ async def run_knowledge_file(
     thread_id: str,
     narrator_name: str | None = None,
     verbose: bool = False,
+    material_type: str = "interview",
+    material_context: str = "",
+    material_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute one knowledge file process via LangGraph workflow."""
 
@@ -144,7 +166,12 @@ async def run_knowledge_file(
         "narrator_name": narrator_name or username,
         "verbose": verbose,
         "trace_id": thread_id,
+        "material_type": material_type,
+        "material_context": material_context,
     }
+    if material_id:
+        initial_state["material_id"] = material_id
+
     result = await workflow.ainvoke(initial_state, thread_id=thread_id)
 
     if result.get("status") == "failed":

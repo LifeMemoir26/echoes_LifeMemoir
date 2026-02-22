@@ -100,38 +100,32 @@ class CharacterProfileExtractor:
         self.model = model
     
     async def extract(
-        self, 
-        text: str, 
-        narrator_name: str = "叙述者"
+        self,
+        text: str,
+        narrator_name: str = "叙述者",
+        material_context: str = "",
     ) -> Dict[str, Any]:
         """
         从文本中提取人物特征
-        
+
         Args:
             text: 待提取的文本
-            narrator_name: 叙述者名称（用于提示词中的占位符）
-            
-        Returns:
-            人物特征字典，包含：
-            - personality: 性格特点列表
-            - worldview: 世界观/价值观列表
-            - aliases: 别名关联列表
-            - chunk_source: 来源文本块（用于追溯）
-            - extracted_at: 提取时间戳
+            narrator_name: 叙述者名称
+            material_context: 用户补充的背景说明（非空时注入提示词头部）
         """
         try:
-            # 构造用户提示词
             user_prompt = self.USER_PROMPT_TEMPLATE.format(
                 narrator_name=narrator_name,
                 text=text
             )
-            
-            # 调用LLM（系统提示词分离，保证返回完美JSON）
+            if material_context:
+                user_prompt = f"[背景说明]\n{material_context}\n\n{user_prompt}"
+
             profile = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=self.SYSTEM_PROMPT,
                 model=self.model,
-                temperature=0.3  # 适中温度，兼顾稳定性和创造性
+                temperature=0.3
             )
             
             # 日志输出（personality和worldview现在是字符串）

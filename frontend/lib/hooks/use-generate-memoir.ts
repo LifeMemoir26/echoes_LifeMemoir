@@ -21,9 +21,11 @@ export function useGenerateMemoir() {
       ? mutation.error.normalized
       : mutation.error
         ? {
-            code: "UNKNOWN_ERROR",
-            message: mutation.error.message,
-            retryable: false
+            code: /failed to fetch/i.test(mutation.error.message) ? "NETWORK_ERROR" : "UNKNOWN_ERROR",
+            message: /failed to fetch/i.test(mutation.error.message)
+              ? "无法连接后端服务，请确认后端 8000 端口已启动且前端使用 /api/v1 代理"
+              : mutation.error.message,
+            retryable: /failed to fetch/i.test(mutation.error.message)
           }
         : null;
 

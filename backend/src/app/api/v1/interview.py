@@ -6,9 +6,9 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
 
 from src.application.interview.session import (
@@ -19,6 +19,7 @@ from src.application.interview.session import (
     reset_interview_session,
 )
 
+from .deps import get_current_username
 from .errors import build_error, error_response
 from .models import ApiResponse, SessionActionData, SessionCreateData, SessionCreateRequest, SessionMessageRequest
 from .session_registry import SessionEvent, registry
@@ -38,7 +39,10 @@ def _encode_sse(event_id: int, event: str, payload: dict[str, Any]) -> str:
 
 
 @router.post("/session/create", response_model=ApiResponse[SessionCreateData])
-async def create_session(payload: SessionCreateRequest) -> ApiResponse[SessionCreateData]:
+async def create_session(
+    payload: SessionCreateRequest,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[SessionCreateData]:
     username = payload.username.strip()
     trace_id = f"session-{uuid.uuid4().hex[:12]}"
     if not username:
@@ -47,6 +51,37 @@ async def create_session(payload: SessionCreateRequest) -> ApiResponse[SessionCr
             error_code="INVALID_USERNAME",
             error_message="username must not be empty",
             trace_id=trace_id,
+        )
+
+    if current_username != username:
+        raise error_response(
+            status_code=403,
+            error_code="FORBIDDEN_USERNAME",
+            error_message="token username does not match request username",
+            trace_id=trace_id,
+        )
+
+    existing = await registry.get_active_by_username(username)
+    if existing is not None:
+        return ApiResponse(
+            status="failed",
+            data=None,
+            errors=[
+                build_error(
+                    error_code="SESSION_CONFLICT",
+                    error_message="active session already exists for username",
+                    retryable=False,
+                    trace_id=trace_id,
+                    error_details={"existing_session_id": existing.session_id},
+                ),
+                build_error(
+                    error_code="SESSION_RECOVERABLE",
+                    error_message=f"existing session_id={existing.session_id}",
+                    retryable=False,
+                    trace_id=trace_id,
+                    error_details={"existing_session_id": existing.session_id},
+                ),
+            ],
         )
 
     interview_session = await create_interview_session(username=username)
@@ -63,6 +98,7 @@ async def create_session(payload: SessionCreateRequest) -> ApiResponse[SessionCr
             error_message="active session already exists for username",
             retryable=False,
             trace_id=trace_id,
+            error_details={"existing_session_id": conflict.session_id},
         )
         return ApiResponse(
             status="failed",
@@ -110,13 +146,24 @@ async def create_session(payload: SessionCreateRequest) -> ApiResponse[SessionCr
 
 
 @router.post("/session/{session_id}/message", response_model=ApiResponse[SessionActionData])
-async def send_message(session_id: str, payload: SessionMessageRequest) -> ApiResponse[SessionActionData]:
+async def send_message(
+    session_id: str,
+    payload: SessionMessageRequest,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[SessionActionData]:
     record = await registry.get(session_id)
     if record is None or not record.active:
         raise error_response(
             status_code=404,
             error_code="SESSION_NOT_FOUND",
             error_message="session does not exist or has expired",
+            trace_id=f"session-{session_id}",
+        )
+    if current_username != record.username:
+        raise error_response(
+            status_code=403,
+            error_code="FORBIDDEN_USERNAME",
+            error_message="token username does not match session owner",
             trace_id=f"session-{session_id}",
         )
 
@@ -139,6 +186,7 @@ async def send_message(session_id: str, payload: SessionMessageRequest) -> ApiRe
             timestamp=payload.timestamp,
         )
         info = await get_interview_info(record.interview_session)
+        background_info = info.get("background_info", {})
         await registry.publish(
             session_id,
             "context",
@@ -146,6 +194,9 @@ async def send_message(session_id: str, payload: SessionMessageRequest) -> ApiRe
                 "trace_id": trace_id,
                 "background_meta": info.get("meta", {}),
                 "pending_events": info.get("pending_events", {}),
+                "event_supplements": background_info.get("event_supplements", []),
+                "positive_triggers": background_info.get("positive_triggers", []),
+                "sensitive_topics": background_info.get("sensitive_topics", []),
                 "at": _iso_now(),
             },
         )
@@ -197,13 +248,23 @@ async def send_message(session_id: str, payload: SessionMessageRequest) -> ApiRe
 
 
 @router.post("/session/{session_id}/flush", response_model=ApiResponse[SessionActionData])
-async def flush_session(session_id: str) -> ApiResponse[SessionActionData]:
+async def flush_session(
+    session_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[SessionActionData]:
     record = await registry.get(session_id)
     if record is None or not record.active:
         raise error_response(
             status_code=404,
             error_code="SESSION_NOT_FOUND",
             error_message="session does not exist or has expired",
+            trace_id=f"session-{session_id}",
+        )
+    if current_username != record.username:
+        raise error_response(
+            status_code=403,
+            error_code="FORBIDDEN_USERNAME",
+            error_message="token username does not match session owner",
             trace_id=f"session-{session_id}",
         )
 
@@ -259,13 +320,23 @@ async def flush_session(session_id: str) -> ApiResponse[SessionActionData]:
 
 
 @router.delete("/session/{session_id}", response_model=ApiResponse[SessionActionData])
-async def close_session(session_id: str) -> ApiResponse[SessionActionData]:
+async def close_session(
+    session_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[SessionActionData]:
     record = await registry.close(session_id)
     if record is None:
         raise error_response(
             status_code=404,
             error_code="SESSION_NOT_FOUND",
             error_message="session does not exist or has expired",
+            trace_id=f"session-{session_id}",
+        )
+    if current_username != record.username:
+        raise error_response(
+            status_code=403,
+            error_code="FORBIDDEN_USERNAME",
+            error_message="token username does not match session owner",
             trace_id=f"session-{session_id}",
         )
 
@@ -294,6 +365,7 @@ async def close_session(session_id: str) -> ApiResponse[SessionActionData]:
 @router.get("/session/{session_id}/events")
 async def stream_events(
     session_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
     record = await registry.get(session_id)
@@ -302,6 +374,13 @@ async def stream_events(
             status_code=404,
             error_code="SESSION_NOT_FOUND",
             error_message="session does not exist or has expired",
+            trace_id=f"session-{session_id}",
+        )
+    if current_username != record.username:
+        raise error_response(
+            status_code=403,
+            error_code="FORBIDDEN_USERNAME",
+            error_message="token username does not match session owner",
             trace_id=f"session-{session_id}",
         )
 

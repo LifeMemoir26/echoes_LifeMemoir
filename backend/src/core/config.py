@@ -75,15 +75,38 @@ class LLMConfig(BaseSettings):
 
 
 class EmbeddingConfig(BaseSettings):
-    """嵌入模型配置"""
-    # 使用本源量子 acge_text_embedding（实体识别优化，中文MTEB霸榜）
+    """嵌入模型配置 — Gemini Embedding API"""
+    gemini_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("GEMINI_API_KEY", "gemini_api_key", "EMBEDDING_GEMINI_API_KEY"),
+        description="Gemini API Key（主密钥）"
+    )
+    gemini_api_keys_str: str = Field(
+        default="",
+        validation_alias=AliasChoices("GEMINI_API_KEYS", "gemini_api_keys_str"),
+        description="Gemini API Keys 列表（逗号分隔，用于轮换）"
+    )
     model_name: str = Field(
-        default="aspire/acge_text_embedding",
+        default="models/gemini-embedding-001",
         description="嵌入模型名称"
     )
-    dimension: int = Field(default=1792, description="嵌入维度")
-    batch_size: int = Field(default=32, description="向量编码批次大小")
-    
+    dimension: int = Field(default=768, description="嵌入维度")
+    batch_size: int = Field(default=100, description="向量编码批次大小（Gemini 限制）")
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def api_keys(self) -> list[str]:
+        """获取所有可用的 Gemini API key 列表"""
+        # 优先用逗号分隔的多 key 列表
+        if self.gemini_api_keys_str:
+            keys = [k.strip() for k in self.gemini_api_keys_str.split(",") if k.strip()]
+            if keys:
+                return keys
+        # fallback 到单个主 key
+        if self.gemini_api_key:
+            return [self.gemini_api_key]
+        return []
+
     class Config:
         env_prefix = "EMBEDDING_"
 

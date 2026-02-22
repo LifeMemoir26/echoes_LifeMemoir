@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from src.infra.utils.text_splitter import TextSplitter, SplitterMode
+from src.infra.utils.text_splitter import TextSplitter, SplitterMode, DocumentSplitter
 from .extractor.life_event_extractor import LifeEventExtractor
 from .extractor.character_profile_extractor import CharacterProfileExtractor
 from src.infra.llm.client.qiniu_client import AsyncQiniuAIClient
@@ -55,7 +55,7 @@ class ExtractionApplication:
         self.concurrency_manager = llm_gateway
         self.config = llm_gateway.config
         
-        # 文本切分器（知识提取模式：8000字窗口，4000字步长）
+        # 文本切分器（采访模式：8000字窗口，4000字步长）
         self.text_splitter = TextSplitter(
             mode=SplitterMode.KNOWLEDGE_EXTRACTION
         )
@@ -87,15 +87,16 @@ class ExtractionApplication:
         chunk: str,
         chunk_id: int,
         narrator_name: str,
-        total_chunks: int
+        total_chunks: int,
+        material_context: str = ""
     ) -> tuple[str, int, int]:
         """提取事件并立即写入"""
         try:
             event_extractor = LifeEventExtractor(
-                self.concurrency_manager, 
+                self.concurrency_manager,
                 model=self.config.extraction_model
             )
-            events = await event_extractor.extract(chunk, narrator_name)
+            events = await event_extractor.extract(chunk, narrator_name, material_context=material_context)
             if events:
                 count = self.event_store.write_events(events)
                 if self.verbose:
@@ -111,7 +112,8 @@ class ExtractionApplication:
         chunk: str,
         chunk_id: int,
         narrator_name: str,
-        total_chunks: int
+        total_chunks: int,
+        material_context: str = ""
     ) -> tuple[str, int, int]:
         """提取特征并立即写入"""
         try:
@@ -119,7 +121,7 @@ class ExtractionApplication:
                 self.concurrency_manager,
                 model=self.config.extraction_model
             )
-            profile = await profile_extractor.extract(chunk, narrator_name)
+            profile = await profile_extractor.extract(chunk, narrator_name, material_context=material_context)
             if profile and (profile.get('personality') or profile.get('worldview') or profile.get('aliases')):
                 profile_id = self.character_store.write_profile(profile)
                 
@@ -146,37 +148,47 @@ class ExtractionApplication:
     async def process_text(
         self,
         text: str,
-        narrator_name: str = "叙述者"
+        narrator_name: str = "叙述者",
+        material_type: str = "interview",
+        material_context: str = ""
     ) -> Dict[str, Any]:
         """
         处理文本，提取并存储到SQLite
-        
+
         Args:
             text: 待处理的文本
             narrator_name: 叙述者名称
-            
+            material_type: 材料类型 "interview"（采访对话）或 "document"（自由文档）
+            material_context: 用户补充的背景说明，非空时注入提取提示词头部
+
         Returns:
             处理结果统计
         """
         start_time = asyncio.get_event_loop().time()
-        
-        # 步骤1: 文本切分
-        self._print_step(1, 5, f"文本切分 (8000字窗口, 4000字步长)")
-        chunks = self.text_splitter.split(text)
-        
+
+        # 步骤1: 按材料类型选择切分器
+        if material_type == "document":
+            splitter = DocumentSplitter()
+            split_desc = "文档模式 (1500字窗口, 200字重叠)"
+        else:
+            splitter = self.text_splitter
+            split_desc = "采访模式 (8000字窗口, 4000字步长)"
+
+        self._print_step(1, 5, f"文本切分 ({split_desc})")
+        chunks = splitter.split(text)
+
         if self.verbose:
             print(f"   切分完成: {len(text)}字符 -> {len(chunks)}个块")
-            print(f"   {self.text_splitter.get_chunk_info(chunks)}")
         
         # 步骤2: 并发提取与写入（提取完立即写入，无需等待所有块）
         self._print_step(2, 5, f"并发提取与写入 (共{len(chunks)}个块)")
-        
+
         # 创建所有提取+写入任务（每个chunk有2个独立任务）
         tasks = []
         for i, chunk in enumerate(chunks):
             chunk_id = i + 1
-            tasks.append(self._extract_and_write_events(chunk, chunk_id, narrator_name, len(chunks)))
-            tasks.append(self._extract_and_write_profile(chunk, chunk_id, narrator_name, len(chunks)))
+            tasks.append(self._extract_and_write_events(chunk, chunk_id, narrator_name, len(chunks), material_context))
+            tasks.append(self._extract_and_write_profile(chunk, chunk_id, narrator_name, len(chunks), material_context))
         
         # 并发执行所有任务（ConcurrencyManager内部自动排队和轮询）
         results = await asyncio.gather(*tasks, return_exceptions=True)

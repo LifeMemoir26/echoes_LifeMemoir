@@ -1,4 +1,5 @@
-import type { ApiEnvelope, ApiError, NormalizedApiError } from "@/lib/api/types";
+import type { ApiEnvelope, ApiError, InterviewStreamError, NormalizedApiError } from "@/lib/api/types";
+import { getToken } from "@/lib/auth/token";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -35,7 +36,45 @@ export function normalizeApiError(error: ApiError): NormalizedApiError {
     code: error.error_code,
     message: error.error_message,
     retryable: error.retryable,
+    traceId: error.trace_id,
+    details: error.error_details
+  };
+}
+
+export function normalizeInterviewSseError(error: InterviewStreamError): NormalizedApiError {
+  return {
+    code: error.error_code,
+    message: error.error_message,
+    retryable: error.retryable,
     traceId: error.trace_id
+  };
+}
+
+export function normalizeUnknownError(error: unknown, fallbackMessage: string): NormalizedApiError {
+  if (error instanceof ApiRequestError) {
+    return error.normalized;
+  }
+
+  if (error instanceof Error) {
+    if (/failed to fetch/i.test(error.message)) {
+      return {
+        code: "NETWORK_ERROR",
+        message: "无法连接后端服务，请检查后端是否已启动",
+        retryable: true
+      };
+    }
+
+    return {
+      code: "UNKNOWN_ERROR",
+      message: error.message || fallbackMessage,
+      retryable: false
+    };
+  }
+
+  return {
+    code: "UNKNOWN_ERROR",
+    message: fallbackMessage,
+    retryable: false
   };
 }
 
@@ -60,13 +99,7 @@ export function parseEnvelope<T>(payload: unknown): ApiEnvelope<T> {
   };
 }
 
-export async function apiPost<TData, TRequest>(path: string, body: TRequest): Promise<TData> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-
+async function parseResponseToEnvelope<TData>(response: Response): Promise<ApiEnvelope<TData>> {
   const rawText = await response.text();
   let json: unknown = null;
   if (rawText) {
@@ -81,9 +114,17 @@ export async function apiPost<TData, TRequest>(path: string, body: TRequest): Pr
     }
   }
 
-  let envelope: ApiEnvelope<TData>;
+  // FastAPI wraps HTTPException body as {"detail": {...}} — unwrap it so the
+  // standard envelope parser works for both success and error responses.
+  const unwrapped =
+    json &&
+    typeof json === "object" &&
+    "detail" in (json as Record<string, unknown>)
+      ? (json as Record<string, unknown>).detail
+      : json;
+
   try {
-    envelope = parseEnvelope<TData>(json);
+    return parseEnvelope<TData>(unwrapped);
   } catch (error) {
     if (error instanceof ContractError) {
       throw new ApiRequestError({
@@ -94,14 +135,84 @@ export async function apiPost<TData, TRequest>(path: string, body: TRequest): Pr
     }
     throw error;
   }
-  if (envelope.status === "success" && envelope.data) {
-    return envelope.data;
-  }
+}
 
+function throwFirstApiErrorOrContract<TData>(envelope: ApiEnvelope<TData>): never {
   const first = envelope.errors[0];
   if (first) {
     throw new ApiRequestError(normalizeApiError(first));
   }
 
   throw new ContractError("Failed response without errors");
+}
+
+async function requestJson<TData>(input: RequestInfo | URL, init: RequestInit): Promise<TData> {
+  let response: Response;
+  try {
+    response = await fetch(input, init);
+  } catch (error) {
+    const errorName =
+      error && typeof error === "object" && "name" in error ? String((error as { name?: unknown }).name) : "";
+    if (errorName === "AbortError") {
+      throw new ApiRequestError({
+        code: "REQUEST_ABORTED",
+        message: "请求已取消",
+        retryable: true
+      });
+    }
+
+    throw new ApiRequestError({
+      code: "NETWORK_ERROR",
+      message: "无法连接后端服务，请检查后端是否已启动",
+      retryable: true
+    });
+  }
+
+  const envelope = await parseResponseToEnvelope<TData>(response);
+  if (envelope.status === "success" && envelope.data) {
+    return envelope.data;
+  }
+
+  throwFirstApiErrorOrContract(envelope);
+}
+
+export async function apiPost<TData, TRequest>(path: string, body: TRequest): Promise<TData> {
+  return apiPostWithSignal<TData, TRequest>(path, body);
+}
+
+export async function apiPostWithSignal<TData, TRequest>(
+  path: string,
+  body: TRequest,
+  signal?: AbortSignal
+): Promise<TData> {
+  return requestJson<TData>(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+    signal
+  });
+}
+
+export async function apiDelete<TData>(path: string): Promise<TData> {
+  return requestJson<TData>(`${API_BASE_URL}${path}`, {
+    method: "DELETE",
+    headers: getAuthHeaders()
+  });
+}
+
+export async function apiGet<TData>(path: string, signal?: AbortSignal): Promise<TData> {
+  return requestJson<TData>(`${API_BASE_URL}${path}`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+    signal
+  });
+}
+
+export function getAuthHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export function getApiBaseUrl(): string {
+  return API_BASE_URL;
 }

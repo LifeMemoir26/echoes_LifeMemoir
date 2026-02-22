@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from src.application.generate.api import generate_memoir, generate_timeline
 
+from .deps import get_current_username
 from .errors import error_response, new_trace_id, normalize_workflow_failure
 from .models import (
     ApiResponse,
@@ -22,8 +24,18 @@ router = APIRouter()
 
 
 @router.post("/generate/timeline", response_model=ApiResponse[TimelineGenerateData])
-async def api_generate_timeline(payload: TimelineGenerateRequest) -> ApiResponse[TimelineGenerateData]:
+async def api_generate_timeline(
+    payload: TimelineGenerateRequest,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[TimelineGenerateData]:
     trace_id = new_trace_id("timeline")
+    if current_username != payload.username.strip():
+        raise error_response(
+            status_code=403,
+            error_code="FORBIDDEN_USERNAME",
+            error_message="token username does not match request username",
+            trace_id=trace_id,
+        )
     try:
         result = await generate_timeline(
             username=payload.username,
@@ -72,8 +84,18 @@ async def api_generate_timeline(payload: TimelineGenerateRequest) -> ApiResponse
 
 
 @router.post("/generate/memoir", response_model=ApiResponse[MemoirGenerateData])
-async def api_generate_memoir(payload: MemoirGenerateRequest) -> ApiResponse[MemoirGenerateData]:
+async def api_generate_memoir(
+    payload: MemoirGenerateRequest,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[MemoirGenerateData]:
     trace_id = new_trace_id("memoir")
+    if current_username != payload.username.strip():
+        raise error_response(
+            status_code=403,
+            error_code="FORBIDDEN_USERNAME",
+            error_message="token username does not match request username",
+            trace_id=trace_id,
+        )
     try:
         result = await generate_memoir(
             username=payload.username,

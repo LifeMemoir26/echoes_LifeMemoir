@@ -16,6 +16,7 @@ class SplitterMode(Enum):
     """切分器模式"""
     KNOWLEDGE_EXTRACTION = "knowledge_extraction"  # 知识提取模式：8000/4000
     VECTOR_BUILDING = "vector_building"            # 向量构建模式：1000/900
+    DOCUMENT = "document"                          # 文档切分模式：句子边界，1500字
     CUSTOM = "custom"                              # 自定义模式
 
 
@@ -201,19 +202,19 @@ class TextSplitter:
     def get_chunk_info(self, chunks: List[str]) -> str:
         """
         获取切分信息摘要
-        
+
         Args:
             chunks: 切分后的文本块列表
-            
+
         Returns:
             信息摘要字符串
         """
         if not chunks:
             return "无切分块"
-        
+
         total_chars = sum(len(c) for c in chunks)
         avg_size = total_chars // len(chunks)
-        
+
         info = [
             f"切分块数量: {len(chunks)}",
             f"总字符数: {total_chars}",
@@ -221,5 +222,102 @@ class TextSplitter:
             f"最小块: {min(len(c) for c in chunks)}字符",
             f"最大块: {max(len(c) for c in chunks)}字符"
         ]
-        
+
         return "\n".join(info)
+
+
+class DocumentSplitter:
+    """
+    文档切分器 — 基于句子边界切分日记/故事/文章等非采访文本。
+
+    策略：
+    1. 先按 [。！？…]+ 或 \\n{2,} 分句（保留标点）
+    2. 聚合句子直到接近 target_size
+    3. 重叠：将上一 chunk 末尾若干句子（累计 ≥ overlap_chars）作为新 chunk 开头
+    """
+
+    SENTENCE_BOUNDARY = re.compile(r'([。！？…]+|\n{2,})')
+
+    def __init__(
+        self,
+        target_size: int = 1500,
+        overlap_chars: int = 200,
+    ):
+        self.target_size = target_size
+        self.overlap_chars = overlap_chars
+        logger.info(
+            f"初始化 DocumentSplitter — 目标大小: {target_size}字, 重叠: {overlap_chars}字"
+        )
+
+    def _split_to_sentences(self, text: str) -> List[str]:
+        """按句子边界分割，保留句末标点"""
+        parts = self.SENTENCE_BOUNDARY.split(text)
+        sentences: List[str] = []
+        i = 0
+        while i < len(parts):
+            seg = parts[i]
+            if i + 1 < len(parts) and self.SENTENCE_BOUNDARY.fullmatch(parts[i + 1]):
+                # 将标点附到当前句子末尾
+                sentences.append(seg + parts[i + 1])
+                i += 2
+            else:
+                if seg.strip():
+                    sentences.append(seg)
+                i += 1
+        return [s for s in sentences if s.strip()]
+
+    def split(self, text: str) -> List[str]:
+        """
+        按句子边界切分文本
+
+        Args:
+            text: 原始文档文本
+        Returns:
+            切分后的文本块列表
+        """
+        text = text.strip()
+        if not text:
+            return []
+
+        if len(text) <= self.target_size:
+            return [text]
+
+        sentences = self._split_to_sentences(text)
+        if not sentences:
+            return [text]
+
+        chunks: List[str] = []
+        current: List[str] = []
+        current_len = 0
+
+        for sent in sentences:
+            sent_len = len(sent)
+
+            if current_len + sent_len > self.target_size and current:
+                # 当前 chunk 达到目标大小，输出
+                chunks.append("".join(current))
+
+                # 计算重叠：取末尾句子，累计 ≥ overlap_chars
+                overlap: List[str] = []
+                overlap_len = 0
+                for s in reversed(current):
+                    overlap.insert(0, s)
+                    overlap_len += len(s)
+                    if overlap_len >= self.overlap_chars:
+                        break
+
+                current = overlap
+                current_len = sum(len(s) for s in current)
+
+            current.append(sent)
+            current_len += sent_len
+
+        if current:
+            chunks.append("".join(current))
+
+        logger.info(
+            f"DocumentSplitter: {len(text)}字 → {len(chunks)} 个 chunk "
+            f"(目标={self.target_size}, 重叠={self.overlap_chars})"
+        )
+        return chunks
+

@@ -3,21 +3,18 @@ import { cn } from "@/lib/utils/cn";
 import type { ButtonHTMLAttributes } from "react";
 
 const buttonVariants = cva(
-  "focus-visible-ring inline-flex min-h-11 items-center justify-center rounded-[var(--radius)] px-6 text-xs font-medium uppercase tracking-[0.15em] transition duration-[var(--dur-base)] disabled:pointer-events-none disabled:opacity-50",
+  "focus-visible-ring inline-flex min-h-11 items-center justify-center rounded-lg px-5 text-sm font-semibold transition duration-[var(--dur-base)] disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        primary:
-          "bg-[var(--brass-gradient)] text-[var(--accent-fg)] [text-shadow:var(--engraved-text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.2),inset_0_-1px_0_rgba(0,0,0,0.2),0_2px_8px_rgba(0,0,0,0.3)] hover:brightness-110",
-        secondary:
-          "border-2 border-[var(--accent)] bg-transparent text-[var(--accent)] hover:border-[var(--accent-2)] hover:bg-[var(--accent-2)] hover:text-[var(--fg)]",
-        ghost:
-          "bg-transparent text-[var(--accent)] underline-offset-4 hover:underline"
+        primary: "bg-[#A2845E] text-white hover:bg-[#8E7250] shadow-sm",
+        secondary: "border border-slate-300 bg-white text-slate-700 hover:border-[#C4A882] hover:text-[#A2845E]",
+        ghost: "bg-transparent text-[#A2845E] hover:bg-[#F5EDE4]"
       },
       size: {
-        sm: "h-10 px-5",
-        md: "h-12 px-8",
-        lg: "h-14 px-10"
+        sm: "h-10 px-4",
+        md: "h-11 px-5",
+        lg: "h-12 px-6"
       }
     },
     defaultVariants: {

@@ -83,6 +83,9 @@ class WorkflowFacade:
         file_path: Path,
         narrator_name: str | None = None,
         thread_id: str | None = None,
+        material_type: str = "interview",
+        material_context: str = "",
+        material_id: str | None = None,
     ) -> dict[str, Any]:
         workflow = self._get_knowledge_workflow()
         tid = thread_id or f"knowledge-{uuid.uuid4().hex[:12]}"
@@ -93,6 +96,9 @@ class WorkflowFacade:
             narrator_name=narrator_name,
             thread_id=tid,
             verbose=self.verbose,
+            material_type=material_type,
+            material_context=material_context,
+            material_id=material_id,
         )
 
     async def generate_timeline(

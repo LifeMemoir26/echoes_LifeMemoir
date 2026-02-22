@@ -41,17 +41,34 @@ class LifeEventExtractor:
     "year": "1985",
     "time_detail": "春季",
     "event_summary": "叙述者从北京大学中文系毕业",
-    "event_details": "叙述者在1985年春季从北京大学中文系毕业，获得文学学士学位。毕业典礼在5月举行，有300多名学生参加。毕业后他收到了多个工作邀请。"
+    "event_details": "叙述者在1985年春季从北京大学中文系毕业，获得文学学士学位。毕业典礼在5月举行。",
+    "life_stage": "青少年",
+    "event_category": ["教育", "成就"],
+    "confidence": "high"
   },
   {
     "year": "9999",
     "time_detail": "1990年到1995年",
-    "event_summary": "叙述者在上海人民出版社工作出任编辑",
-    "event_details": "叙述者在上海人民出版社担任编辑，负责文学类图书的审稿和编辑工作。期间参与编辑了多本畅销书籍。"
+    "event_summary": "叙述者在上海人民出版社任编辑",
+    "event_details": "叙述者在上海人民出版社担任编辑，负责文学类图书审稿和编辑工作。",
+    "life_stage": "成年初期",
+    "event_category": ["工作"],
+    "confidence": "low"
   }
 ]
 
 如果没有找到重要事件，返回空数组 []
+
+**life_stage 枚举值**（根据发生年龄推断，不知出生年则填"未知"）：
+童年 | 青少年 | 成年初期 | 中年 | 晚年 | 未知
+
+**event_category 可多选**（JSON 字符串数组）：
+教育 | 工作 | 家庭 | 感情 | 健康 | 迁居 | 成就 | 社会 | 财务
+
+**confidence 规则**：
+- "high"：year 字段是精确4位年份（如 "1985"）
+- "medium"：年份是推断的（time_detail 有线索）
+- "low"：year = "9999"（完全不确定时间）
 
 **严格禁止**：
 - 不要用```json或```包裹输出
@@ -127,37 +144,32 @@ class LifeEventExtractor:
         self.model = model
     
     async def extract(
-        self, 
-        text: str, 
-        narrator_name: str = "叙述者"
+        self,
+        text: str,
+        narrator_name: str = "叙述者",
+        material_context: str = "",
     ) -> List[Dict[str, Any]]:
         """
         从文本中提取人生事件
-        
+
         Args:
             text: 待提取的文本
-            narrator_name: 叙述者名称（用于提示词中的占位符）
-            
-        Returns:
-            事件列表，每个事件包含：
-            - year: 年份（精准年份或"9999"）
-            - time_detail: 时间补充信息
-            - event_summary: 事件简要说明
-            - extracted_at: 提取时间戳
+            narrator_name: 叙述者名称
+            material_context: 用户补充的背景说明（非空时注入提示词头部）
         """
         try:
-            # 构造用户提示词
             user_prompt = self.USER_PROMPT_TEMPLATE.format(
                 narrator_name=narrator_name,
                 text=text
             )
-            
-            # 调用LLM（系统提示词分离，保证返回完美JSON）
+            if material_context:
+                user_prompt = f"[背景说明]\n{material_context}\n\n{user_prompt}"
+
             events = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=self.SYSTEM_PROMPT,
                 model=self.model,
-                temperature=0.1  # 低温度保证稳定性
+                temperature=0.1
             )
             
             # 验证格式
@@ -182,35 +194,37 @@ class LifeEventExtractor:
     
     def _validate_event(self, event: Dict[str, Any]) -> bool:
         """
-        验证事件格式
-        
-        必需字段：
-        - year: 字符串
-        - time_detail: 字符串
-        - event_summary: 字符串
-        - event_details: 字符串
+        验证并补全事件格式（缺失的新字段填默认值）
         """
         required_fields = ['year', 'time_detail', 'event_summary', 'event_details']
-        
+
         for field in required_fields:
             if field not in event:
                 logger.warning(f"事件缺少必需字段: {field}")
                 return False
-            
             if not isinstance(event[field], str):
                 logger.warning(f"字段类型错误: {field} 应为字符串")
                 return False
-        
-        # 验证年份格式（应为4位数字或"9999"）
+
+        # 验证年份格式
         year = event['year']
         if not (year.isdigit() and len(year) == 4):
             logger.warning(f"年份格式错误: {year}")
             return False
-        
-        # 验证event_details长度（不超过300字）
-        event_details = event['event_details']
-        if len(event_details) > 300:
-            logger.warning(f"event_details超过300字限制: {len(event_details)}字")
-            # 不返回False，只是警告，因为AI可能略微超出
-        
+
+        # 补全新字段默认值
+        event.setdefault('life_stage', '未知')
+        if not isinstance(event.get('life_stage'), str):
+            event['life_stage'] = '未知'
+
+        if not isinstance(event.get('event_category'), list):
+            event['event_category'] = '[]'
+        else:
+            import json as _json
+            event['event_category'] = _json.dumps(event['event_category'], ensure_ascii=False)
+
+        # confidence：根据 year 推断默认值
+        if 'confidence' not in event or event['confidence'] not in ('high', 'medium', 'low'):
+            event['confidence'] = 'low' if year == '9999' else 'high'
+
         return True

@@ -27,3 +27,4 @@ data/
 # --- vibe coding ---
 .codex/
 openspec/
+.claude/

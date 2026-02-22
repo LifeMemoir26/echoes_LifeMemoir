@@ -33,3 +33,7 @@ class KnowledgeWorkflowState(TypedDict):
 
     trace_id: NotRequired[str]
     failed_node: NotRequired[str]
+
+    material_type: NotRequired[str]      # "interview" | "document"
+    material_context: NotRequired[str]   # 用户填写的背景说明
+    material_id: NotRequired[str]        # materials 表主键（UUID）

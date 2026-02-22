@@ -51,6 +51,8 @@ def test_create_session_conflict_and_recovery(monkeypatch):
     assert second.json()["status"] == "failed"
     codes = [e["error_code"] for e in second.json()["errors"]]
     assert "SESSION_CONFLICT" in codes
+    conflict = next(e for e in second.json()["errors"] if e["error_code"] == "SESSION_CONFLICT")
+    assert conflict["error_details"]["existing_session_id"] == first.json()["data"]["session_id"]
     recoverable = next(e for e in second.json()["errors"] if e["error_code"] == "SESSION_RECOVERABLE")
     assert recoverable["error_details"]["existing_session_id"] == first.json()["data"]["session_id"]
 
