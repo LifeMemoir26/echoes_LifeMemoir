@@ -1,4 +1,4 @@
-import { ApiRequestError, getApiBaseUrl, parseEnvelope } from "@/lib/api/client";
+import { ApiRequestError, getApiBaseUrl, getAuthHeaders, parseEnvelope } from "@/lib/api/client";
 import type { InterviewSseEnvelope, InterviewSseEventType } from "@/lib/api/types";
 
 const VALID_EVENTS: InterviewSseEventType[] = ["connected", "heartbeat", "status", "context", "error", "completed"];
@@ -59,7 +59,7 @@ export async function connectInterviewSse(
     signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
 
-  let headers: HeadersInit = { Accept: "text/event-stream" };
+  let headers: HeadersInit = { Accept: "text/event-stream", ...getAuthHeaders() };
   if (options.lastEventId) {
     headers = { ...headers, "Last-Event-ID": options.lastEventId };
   }

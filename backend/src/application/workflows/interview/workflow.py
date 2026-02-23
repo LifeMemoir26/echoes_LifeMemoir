@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import operator
+from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
@@ -282,6 +283,34 @@ async def run_interview_step(
         "trace_id": thread_id,
     }
     return await workflow.ainvoke(initial_state, thread_id=thread_id)
+
+
+async def run_interview_step_streaming(
+    workflow: InterviewWorkflow,
+    *,
+    thread_id: str,
+    speaker: str | None = None,
+    content: str | None = None,
+    timestamp: float | None = None,
+    flush: bool = False,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """Stream per-node updates for one interview step via LangGraph workflow."""
+
+    initial_state: InterviewWorkflowState = {
+        "workflow_id": workflow.workflow_id,
+        "thread_id": thread_id,
+        "status": "received",
+        "errors": [],
+        "metadata": {},
+        "parallel_updates": [],
+        "speaker": speaker or "",
+        "content": content or "",
+        "timestamp": timestamp,
+        "flush": flush,
+        "trace_id": thread_id,
+    }
+    async for update in workflow.astream_updates(initial_state, thread_id=thread_id):
+        yield update
 
 
 def _state_chunk_to_model(state: InterviewWorkflowState) -> TextChunk | None:

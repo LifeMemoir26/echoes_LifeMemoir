@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,7 @@ from ...application.workflows.interview import (
     InterviewWorkflow,
     InterviewWorkflowRuntime,
     run_interview_step,
+    run_interview_step_streaming,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,21 @@ class InterviewSession:
             content=content,
             timestamp=timestamp,
         )
+
+    async def add_dialogue_streaming(
+        self,
+        speaker: str,
+        content: str,
+        timestamp: float | None = None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        async for update in run_interview_step_streaming(
+            self.workflow,
+            thread_id=self.thread_id,
+            speaker=speaker,
+            content=content,
+            timestamp=timestamp,
+        ):
+            yield update
 
     async def flush_buffer(self) -> None:
         await run_interview_step(self.workflow, thread_id=self.thread_id, flush=True)
@@ -160,6 +177,27 @@ async def add_dialogue(
     timestamp: float | None = None,
 ) -> None:
     await session.add_dialogue(speaker, content, timestamp)
+
+
+async def add_dialogue_streaming(
+    session: InterviewSession,
+    speaker: str,
+    content: str,
+    timestamp: float | None = None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    async for update in session.add_dialogue_streaming(speaker, content, timestamp):
+        yield update
+
+
+async def flush_dialogue_streaming(
+    session: InterviewSession,
+) -> AsyncGenerator[dict[str, Any], None]:
+    async for update in run_interview_step_streaming(
+        session.workflow,
+        thread_id=session.thread_id,
+        flush=True,
+    ):
+        yield update
 
 
 async def get_interview_info(session: InterviewSession) -> dict[str, Any]:

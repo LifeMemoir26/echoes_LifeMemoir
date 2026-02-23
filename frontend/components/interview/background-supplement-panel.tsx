@@ -11,8 +11,8 @@ export function BackgroundSupplementPanel({ supplements }: Props) {
     <div className="flex flex-col h-full min-h-0">
       <p className="mb-3 shrink-0 text-xs uppercase tracking-[0.16em] text-[#A2845E]">背景补充</p>
       {supplements.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-[var(--muted-fg)]">
-          暂无背景补充信息
+        <div className="flex flex-1 items-center justify-center text-sm text-[var(--muted-fg)] text-center px-4">
+          开始采访，发送几条消息后辅助内容将自动出现
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto space-y-2 pr-1">

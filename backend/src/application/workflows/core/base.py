@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import time
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from langgraph.graph import StateGraph
@@ -137,3 +138,39 @@ class WorkflowBase(ABC):
                 "failed_node": initial_state.get("failed_node", "unknown"),
                 "errors": [app_error.model_dump()],
             }
+
+    async def astream_updates(
+        self, initial_state: dict[str, Any], thread_id: str
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Stream per-node updates using LangGraph stream_mode='updates'.
+
+        Each yielded item is {node_name: node_output_dict}.
+        On thread_id mismatch or graph exception, yields {"__error__": {...}} and stops.
+        """
+        if self._compiled is None:
+            self.compile(use_checkpointer=True)
+
+        state_thread_id = initial_state.get("thread_id")
+        if isinstance(state_thread_id, str) and state_thread_id != thread_id:
+            trace_id = initial_state.get("trace_id", thread_id)
+            app_error = map_exception_to_app_error(
+                ValueError("thread_id mismatch between state and invoke config"),
+                trace_id=trace_id,
+                failed_node=initial_state.get("failed_node", "workflow_entry"),
+                error_code="WORKFLOW_THREAD_MISMATCH",
+            )
+            yield {"__error__": {"status": "failed", "errors": [app_error.model_dump()]}}
+            return
+
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            async for update in self._compiled.astream(initial_state, config=config, stream_mode="updates"):
+                yield update
+        except Exception as exc:
+            trace_id = initial_state.get("trace_id", thread_id)
+            app_error = map_exception_to_app_error(
+                exc,
+                trace_id=trace_id,
+                failed_node=initial_state.get("failed_node"),
+            )
+            yield {"__error__": {"status": "failed", "errors": [app_error.model_dump()]}}

@@ -12,10 +12,9 @@ from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
 
 from src.application.interview.session import (
-    add_dialogue,
+    add_dialogue_streaming,
     create_interview_session,
-    flush_session_buffer,
-    get_interview_info,
+    flush_dialogue_streaming,
     reset_interview_session,
 )
 
@@ -36,6 +35,163 @@ def _iso_now() -> str:
 
 def _encode_sse(event_id: int, event: str, payload: dict[str, Any]) -> str:
     return f"id: {event_id}\nevent: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _process_message_bg(
+    record: Any,
+    session_id: str,
+    payload: SessionMessageRequest,
+    trace_id: str,
+) -> None:
+    """Background coroutine that drives add_dialogue_streaming and publishes SSE events."""
+    completed = False
+    try:
+        async for update in add_dialogue_streaming(
+            record.interview_session,
+            speaker=payload.speaker,
+            content=payload.content,
+            timestamp=payload.timestamp,
+        ):
+            if "__error__" in update:
+                error_data = update["__error__"]
+                errors = error_data.get("errors", [{}])
+                first = errors[0] if errors else {}
+                await registry.publish(
+                    session_id,
+                    "error",
+                    {
+                        "error_code": first.get("error_code", "WORKFLOW_ERROR"),
+                        "error_message": first.get("error_message", "Workflow failed"),
+                        "retryable": first.get("retryable", False),
+                        "trace_id": trace_id,
+                        "at": _iso_now(),
+                    },
+                )
+                return
+
+            if "enrich_pending_events" in update:
+                pending_summary = await record.interview_session.get_pending_events_summary()
+                await registry.publish(
+                    session_id,
+                    "context",
+                    {
+                        "trace_id": trace_id,
+                        "partial": "pending_events",
+                        "pending_events": pending_summary,
+                        "at": _iso_now(),
+                    },
+                )
+
+            if "build_context" in update:
+                background_info = record.interview_session.get_background_info()
+                await registry.publish(
+                    session_id,
+                    "context",
+                    {
+                        "trace_id": trace_id,
+                        "partial": "supplements",
+                        "event_supplements": background_info.get("event_supplements", []),
+                        "positive_triggers": background_info.get("positive_triggers", []),
+                        "sensitive_topics": background_info.get("sensitive_topics", []),
+                        "at": _iso_now(),
+                    },
+                )
+
+            if "persist" in update:
+                await registry.publish(
+                    session_id,
+                    "completed",
+                    {"trace_id": trace_id, "status": "message_processed", "at": _iso_now()},
+                )
+                completed = True
+
+    except Exception as exc:
+        error = build_error(
+            error_code="INTERVIEW_MESSAGE_FAILED",
+            error_message=str(exc),
+            retryable=False,
+            trace_id=trace_id,
+        )
+        await registry.publish(
+            session_id,
+            "error",
+            {
+                "error_code": error.error_code,
+                "error_message": error.error_message,
+                "retryable": error.retryable,
+                "trace_id": error.trace_id,
+                "at": _iso_now(),
+            },
+        )
+    finally:
+        if not completed:
+            # buffered branch: split_or_buffer → __end__ without persist
+            await registry.publish(
+                session_id,
+                "completed",
+                {"trace_id": trace_id, "status": "message_processed", "at": _iso_now()},
+            )
+
+
+async def _process_flush_bg(
+    record: Any,
+    session_id: str,
+    trace_id: str,
+) -> None:
+    """Background coroutine that drives flush_dialogue_streaming and publishes SSE events."""
+    completed = False
+    try:
+        async for update in flush_dialogue_streaming(record.interview_session):
+            if "__error__" in update:
+                error_data = update["__error__"]
+                errors = error_data.get("errors", [{}])
+                first = errors[0] if errors else {}
+                await registry.publish(
+                    session_id,
+                    "error",
+                    {
+                        "error_code": first.get("error_code", "WORKFLOW_ERROR"),
+                        "error_message": first.get("error_message", "Flush workflow failed"),
+                        "retryable": first.get("retryable", False),
+                        "trace_id": trace_id,
+                        "at": _iso_now(),
+                    },
+                )
+                return
+
+            if "persist" in update:
+                await registry.publish(
+                    session_id,
+                    "completed",
+                    {"trace_id": trace_id, "status": "flush_completed", "at": _iso_now()},
+                )
+                completed = True
+
+    except Exception as exc:
+        error = build_error(
+            error_code="INTERVIEW_FLUSH_FAILED",
+            error_message=str(exc),
+            retryable=False,
+            trace_id=trace_id,
+        )
+        await registry.publish(
+            session_id,
+            "error",
+            {
+                "error_code": error.error_code,
+                "error_message": error.error_message,
+                "retryable": error.retryable,
+                "trace_id": error.trace_id,
+                "at": _iso_now(),
+            },
+        )
+    finally:
+        if not completed:
+            await registry.publish(
+                session_id,
+                "completed",
+                {"trace_id": trace_id, "status": "flush_completed", "at": _iso_now()},
+            )
 
 
 @router.post("/session/create", response_model=ApiResponse[SessionCreateData])
@@ -178,62 +334,7 @@ async def send_message(
             "at": _iso_now(),
         },
     )
-    try:
-        await add_dialogue(
-            record.interview_session,
-            speaker=payload.speaker,
-            content=payload.content,
-            timestamp=payload.timestamp,
-        )
-        info = await get_interview_info(record.interview_session)
-        background_info = info.get("background_info", {})
-        await registry.publish(
-            session_id,
-            "context",
-            {
-                "trace_id": trace_id,
-                "background_meta": info.get("meta", {}),
-                "pending_events": info.get("pending_events", {}),
-                "event_supplements": background_info.get("event_supplements", []),
-                "positive_triggers": background_info.get("positive_triggers", []),
-                "sensitive_topics": background_info.get("sensitive_topics", []),
-                "at": _iso_now(),
-            },
-        )
-        await registry.publish(
-            session_id,
-            "completed",
-            {
-                "trace_id": trace_id,
-                "status": "message_processed",
-                "at": _iso_now(),
-            },
-        )
-    except Exception as exc:
-        error = build_error(
-            error_code="INTERVIEW_MESSAGE_FAILED",
-            error_message=str(exc),
-            retryable=False,
-            trace_id=trace_id,
-        )
-        await registry.publish(
-            session_id,
-            "error",
-            {
-                "error_code": error.error_code,
-                "error_message": error.error_message,
-                "retryable": error.retryable,
-                "trace_id": error.trace_id,
-                "at": _iso_now(),
-            },
-        )
-        raise error_response(
-            status_code=500,
-            error_code=error.error_code,
-            error_message=error.error_message,
-            retryable=error.retryable,
-            trace_id=error.trace_id,
-        )
+    asyncio.create_task(_process_message_bg(record, session_id, payload, trace_id))
 
     return ApiResponse(
         status="success",
@@ -274,47 +375,16 @@ async def flush_session(
         "status",
         {"trace_id": trace_id, "status": "flushing", "at": _iso_now()},
     )
-    try:
-        await flush_session_buffer(record.interview_session)
-        await registry.publish(
-            session_id,
-            "completed",
-            {"trace_id": trace_id, "status": "flush_completed", "at": _iso_now()},
-        )
-    except Exception as exc:
-        error = build_error(
-            error_code="INTERVIEW_FLUSH_FAILED",
-            error_message=str(exc),
-            retryable=False,
-            trace_id=trace_id,
-        )
-        await registry.publish(
-            session_id,
-            "error",
-            {
-                "error_code": error.error_code,
-                "error_message": error.error_message,
-                "retryable": error.retryable,
-                "trace_id": error.trace_id,
-                "at": _iso_now(),
-            },
-        )
-        raise error_response(
-            status_code=500,
-            error_code=error.error_code,
-            error_message=error.error_message,
-            retryable=error.retryable,
-            trace_id=error.trace_id,
-        )
+    asyncio.create_task(_process_flush_bg(record, session_id, trace_id))
 
     return ApiResponse(
         status="success",
         data=SessionActionData(
             session_id=session_id,
             thread_id=trace_id,
-            status="flushed",
+            status="accepted",
             trace_id=trace_id,
-            details={},
+            details={"queued": True},
         ),
     )
 

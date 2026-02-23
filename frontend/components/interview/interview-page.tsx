@@ -16,11 +16,11 @@ import { PendingEventsPanel } from "./pending-events-panel";
 type Message = { role: "user"; content: string; at: string };
 
 export function InterviewPage() {
-  const { session, state, error, canSubmitCommand, create, send, flush, close, syncFromServerEvent } =
+  const { session, state, error, canSubmitCommand, create, send, flush, close, syncFromServerEvent, recoverableSessionId, recoverFromConflict } =
     useInterviewSession();
 
   const { username } = useWorkspaceContext();
-  const { contextEvent, statusEvent, completedEvent } = useInterviewEvents(session?.session_id ?? null);
+  const { contextEvent, statusEvent, completedEvent, connectionState } = useInterviewEvents(session?.session_id ?? null);
 
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -43,6 +43,28 @@ export function InterviewPage() {
   useEffect(() => {
     if (!contextEvent) return;
 
+    if (contextEvent.partial === "pending_events") {
+      const events = contextEvent.pending_events?.events ?? [];
+      setPendingEvents(events);
+      const incomingIds = new Set(events.map((e) => e.id));
+      setExpandedIds((prev) => {
+        const pruned = new Set<string>();
+        prev.forEach((id) => {
+          if (incomingIds.has(id)) pruned.add(id);
+        });
+        return pruned;
+      });
+      return;
+    }
+
+    if (contextEvent.partial === "supplements") {
+      setSupplements(contextEvent.event_supplements ?? []);
+      setPositiveTriggers(contextEvent.positive_triggers ?? []);
+      setSensitiveTopics(contextEvent.sensitive_topics ?? []);
+      return;
+    }
+
+    // Full update (no partial field)
     setSupplements(contextEvent.event_supplements ?? []);
     setPositiveTriggers(contextEvent.positive_triggers ?? []);
     setSensitiveTopics(contextEvent.sensitive_topics ?? []);
@@ -107,13 +129,21 @@ export function InterviewPage() {
         ? { status: "error" as const, text: "有错误" }
         : { status: "idle" as const, text: "未开始" };
 
+  const sseLabel =
+    isConnected && connectionState === "reconnecting"
+      ? { status: "warning" as const, text: "重连中" }
+      : isConnected && connectionState === "fatal"
+        ? { status: "error" as const, text: "连接失败" }
+        : null;
+
   return (
     <main
       className="flex min-h-screen flex-col"
       style={{ background: "radial-gradient(circle at top, #FDF6EE 0%, #fafaf8 45%, #fafaf8 100%)" }}
     >
       {/* Status bar */}
-      <div className="shrink-0 flex items-center justify-end px-6 py-3 border-b border-black/[0.06] bg-white/80 backdrop-blur-sm">
+      <div className="shrink-0 flex items-center justify-end gap-2 px-6 py-3 border-b border-black/[0.06] bg-white/80 backdrop-blur-sm">
+        {sseLabel && <StatusBadge status={sseLabel.status} label={sseLabel.text} />}
         <StatusBadge status={statusLabel.status} label={statusLabel.text} />
       </div>
 
@@ -156,24 +186,49 @@ export function InterviewPage() {
 
           {!isConnected && state !== "creating_session" && (
             <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6">
-              <p className="text-center text-sm text-slate-500">
-                {state === "closed" || state === "idle_timeout"
-                  ? "会话已结束，请重新创建"
-                  : "为当前账户开始一次采访"}
-              </p>
-              {error && (
-                <p className="text-center text-xs text-rose-600">{error.message}</p>
+              {state === "session_conflict" ? (
+                <>
+                  <p className="text-center text-sm text-slate-600">
+                    检测到已有进行中的会话，是否继续？
+                  </p>
+                  <Button
+                    onClick={() => recoverFromConflict(recoverableSessionId!, username)}
+                    disabled={!recoverableSessionId}
+                    className="w-full"
+                  >
+                    继续已有会话
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleCreate()}
+                    className="text-slate-500"
+                  >
+                    重新创建会话
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="text-center text-sm text-slate-500">
+                    {state === "closed" || state === "idle_timeout"
+                      ? "会话已结束，请重新创建"
+                      : "为当前账户开始一次采访"}
+                  </p>
+                  {error && (
+                    <p className="text-center text-xs text-rose-600">{error.message}</p>
+                  )}
+                  <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    {username || "—"}
+                  </div>
+                  <Button
+                    onClick={() => void handleCreate()}
+                    disabled={!username}
+                    className="w-full"
+                  >
+                    创建会话
+                  </Button>
+                </>
               )}
-              <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                {username || "—"}
-              </div>
-              <Button
-                onClick={() => void handleCreate()}
-                disabled={!username}
-                className="w-full"
-              >
-                创建会话
-              </Button>
             </div>
           )}
 

@@ -117,6 +117,7 @@ export type EventSupplementItem = {
 export type InterviewStreamContext = {
   session_id: string;
   trace_id: string;
+  partial?: "pending_events" | "supplements";
   background_meta?: Record<string, unknown>;
   pending_events?: {
     total: number;
