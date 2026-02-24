@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from src.application.interview.session_app_service import InterviewRouteError, InterviewSessionAppService
@@ -58,25 +58,28 @@ async def create_session(
 
     record, conflict_or_existing, trace_id, _ = await _service.create_session(username)
     if conflict_or_existing is not None:
-        return ApiResponse(
-            status="failed",
-            data=None,
-            errors=[
-                build_error(
-                    error_code="SESSION_CONFLICT",
-                    error_message="active session already exists for username",
-                    retryable=False,
-                    trace_id=trace_id,
-                    error_details={"existing_session_id": conflict_or_existing.session_id},
-                ),
-                build_error(
-                    error_code="SESSION_RECOVERABLE",
-                    error_message=f"existing session_id={conflict_or_existing.session_id}",
-                    retryable=False,
-                    trace_id=trace_id,
-                    error_details={"existing_session_id": conflict_or_existing.session_id},
-                ),
-            ],
+        raise HTTPException(
+            status_code=409,
+            detail=ApiResponse[Any](
+                status="failed",
+                data=None,
+                errors=[
+                    build_error(
+                        error_code="SESSION_CONFLICT",
+                        error_message="active session already exists for username",
+                        retryable=False,
+                        trace_id=trace_id,
+                        error_details={"existing_session_id": conflict_or_existing.session_id},
+                    ),
+                    build_error(
+                        error_code="SESSION_RECOVERABLE",
+                        error_message=f"existing session_id={conflict_or_existing.session_id}",
+                        retryable=False,
+                        trace_id=trace_id,
+                        error_details={"existing_session_id": conflict_or_existing.session_id},
+                    ),
+                ],
+            ).model_dump(),
         )
 
     if record is None:

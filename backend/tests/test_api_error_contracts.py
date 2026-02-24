@@ -83,6 +83,52 @@ def test_generate_memoir_failed_workflow_normalized_contract(monkeypatch):
     assert err["trace_id"] == "wf-123"
 
 
+def test_interview_create_session_conflict_returns_409_failed_envelope(monkeypatch):
+    class FakeService:
+        async def create_session(self, _username: str):
+            conflict = type("Conflict", (), {"session_id": "sess-existing"})()
+            return None, conflict, "session-trace-123", None
+
+    async def _fake_current_username():
+        return "alice"
+
+    monkeypatch.setattr(interview_api, "_service", FakeService())
+    app.dependency_overrides[interview_api.get_current_username] = _fake_current_username
+    try:
+        resp = client.post("/api/v1/session/create", json={"username": "alice"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 409
+    body = resp.json()["detail"]
+    assert body["status"] == "failed"
+    assert body["errors"][0]["error_code"] == "SESSION_CONFLICT"
+    assert body["errors"][0]["error_details"]["existing_session_id"] == "sess-existing"
+
+
+def test_interview_create_session_conflict_keeps_recoverable_error(monkeypatch):
+    class FakeService:
+        async def create_session(self, _username: str):
+            conflict = type("Conflict", (), {"session_id": "sess-existing"})()
+            return None, conflict, "session-trace-123", None
+
+    async def _fake_current_username():
+        return "alice"
+
+    monkeypatch.setattr(interview_api, "_service", FakeService())
+    app.dependency_overrides[interview_api.get_current_username] = _fake_current_username
+    try:
+        resp = client.post("/api/v1/session/create", json={"username": "alice"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 409
+    body = resp.json()["detail"]
+    assert body["status"] == "failed"
+    assert body["errors"][1]["error_code"] == "SESSION_RECOVERABLE"
+    assert body["errors"][1]["error_details"]["existing_session_id"] == "sess-existing"
+
+
 def test_interview_send_message_forbidden_username_contract(monkeypatch):
     class FakeService:
         async def get_owned_active_record(self, session_id: str, current_username: str):
