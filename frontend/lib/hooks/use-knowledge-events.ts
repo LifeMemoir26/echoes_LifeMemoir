@@ -1,8 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { listEvents, listProfiles, listMaterials, getMaterialContent } from "@/lib/api/knowledge-browser";
-import type { EventItem, ProfileData, MaterialItem } from "@/lib/api/knowledge-browser";
+import { listEvents, listProfiles, listMaterials, getMaterialContent } from "@/lib/api/knowledge";
+import type { EventItem, ProfileData, MaterialItem } from "@/lib/api/knowledge";
 import { knowledgeQueryKeys } from "@/lib/query-keys";
 
 export function useKnowledgeEvents() {

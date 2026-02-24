@@ -4,7 +4,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CalendarDays, ChevronDown, ChevronUp } from "lucide-react";
 import { useKnowledgeEvents } from "@/lib/hooks/use-knowledge-events";
-import type { EventItem } from "@/lib/api/knowledge-browser";
+import type { EventItem } from "@/lib/api/knowledge";
 import { softSpring } from "@/lib/motion/spring";
 
 function EventCard({ item, index }: { item: EventItem; index: number }) {

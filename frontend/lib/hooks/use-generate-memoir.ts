@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useMutationState, useQuery } from "@tanstack/react-query";
 import { ApiRequestError } from "@/lib/api/client";
-import { generateMemoir, getSavedMemoir } from "@/lib/api/memoir";
+import { generateMemoir, getSavedMemoir } from "@/lib/api/generate";
 import type { MemoirGenerateData, MemoirGenerateRequest, NormalizedApiError } from "@/lib/api/types";
 
 export function useGenerateMemoir() {

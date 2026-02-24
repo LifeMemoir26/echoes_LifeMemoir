@@ -6,7 +6,7 @@ import { X, Upload, FileText, Mic, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Input } from "@/components/ui/input";
-import { uploadMaterial, type MaterialUploadItem } from "@/lib/api/knowledge-browser";
+import { uploadMaterial, type MaterialUploadItem } from "@/lib/api/knowledge";
 import { knowledgeQueryKeys } from "@/lib/query-keys";
 
 interface Props {

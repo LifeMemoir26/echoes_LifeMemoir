@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { connectInterviewSse } from "@/lib/api/interview-sse";
+import { connectInterviewSse } from "@/lib/api/interview";
 
 function makeSseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();

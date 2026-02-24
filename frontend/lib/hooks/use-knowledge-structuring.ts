@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getApiBaseUrl, getAuthHeaders, normalizeUnknownError } from "@/lib/api/client";
-import { triggerReprocess, cancelStructuring } from "@/lib/api/knowledge-browser";
+import { triggerReprocess, cancelStructuring } from "@/lib/api/knowledge";
 import { knowledgeQueryKeys } from "@/lib/query-keys";
 
 export type StructuringStage = "读取文件" | "提取事件" | "向量化" | "完成" | null;

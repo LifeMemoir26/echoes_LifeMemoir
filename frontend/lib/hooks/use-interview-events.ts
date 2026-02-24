@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { connectInterviewSse } from "@/lib/api/interview-sse";
+import { connectInterviewSse } from "@/lib/api/interview";
 import { normalizeInterviewSseError, normalizeUnknownError } from "@/lib/api/client";
 import type {
   InterviewSseEnvelope,

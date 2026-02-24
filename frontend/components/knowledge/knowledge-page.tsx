@@ -9,9 +9,9 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { useWorkspaceContext } from "@/lib/workspace/context";
 import { useKnowledgeMaterials, useKnowledgeMaterialContent } from "@/lib/hooks/use-knowledge-events";
 import { useKnowledgeStructuring } from "@/lib/hooks/use-knowledge-structuring";
-import { deleteMaterial } from "@/lib/api/knowledge-browser";
+import { deleteMaterial } from "@/lib/api/knowledge";
 import { UploadMaterialModal } from "@/components/knowledge/upload-material-modal";
-import type { MaterialItem } from "@/lib/api/knowledge-browser";
+import type { MaterialItem } from "@/lib/api/knowledge";
 import { softSpring } from "@/lib/motion/spring";
 import { knowledgeQueryKeys } from "@/lib/query-keys";
 

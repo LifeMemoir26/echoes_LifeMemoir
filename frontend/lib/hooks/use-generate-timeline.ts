@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useMutationState, useQuery } from "@tanstack/react-query";
 import { ApiRequestError, normalizeUnknownError } from "@/lib/api/client";
-import { generateTimeline, getSavedTimeline } from "@/lib/api/timeline";
+import { generateTimeline, getSavedTimeline } from "@/lib/api/generate";
 import { useWorkspaceContext } from "@/lib/workspace/context";
 import type { NormalizedApiError, TimelineGenerateData, TimelineGenerateRequest } from "@/lib/api/types";
 
