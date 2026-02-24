@@ -2,6 +2,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from src.application.interview import session_app_service as app_mod
 from src.application.interview.session_app_service import InterviewRouteError, InterviewSessionAppService
 
@@ -11,6 +13,7 @@ class FakeRegistry:
         class R:
             session_id = "sess-existing"
 
+        assert username == "alice"
         return R()
 
 
@@ -18,20 +21,24 @@ def test_create_session_conflict():
     svc = InterviewSessionAppService(FakeRegistry())
 
     async def _run():
-        record, conflict, _trace, _session = await svc.create_session("alice")
+        record, conflict, trace_id, interview_session = await svc.create_session("alice")
         assert record is None
         assert conflict is not None
+        assert conflict.session_id == "sess-existing"
+        assert trace_id.startswith("session-")
+        assert interview_session is None
 
     asyncio.run(_run())
 
 
-def test_close_session_publishes_completed_and_resets(monkeypatch):
+def test_close_session_publishes_completed_and_resets(monkeypatch: pytest.MonkeyPatch):
     class Registry:
         def __init__(self):
             self.published = []
             self.record = SimpleNamespace(username="alice", thread_id="thread-1", interview_session=object())
 
         async def close(self, session_id: str):
+            assert session_id == "sess-1"
             return self.record
 
         async def publish(self, session_id: str, event: str, payload: dict):
@@ -50,8 +57,17 @@ def test_close_session_publishes_completed_and_resets(monkeypatch):
         record = await svc.close_session("sess-1", "alice")
         assert record.thread_id == "thread-1"
         assert calls["reset"] == 1
-        assert registry.published[0][1] == "completed"
-        assert registry.published[0][2]["status"] == "session_closed"
+        assert registry.published == [
+            (
+                "sess-1",
+                "completed",
+                {
+                    "trace_id": "thread-1",
+                    "status": "session_closed",
+                    "at": registry.published[0][2]["at"],
+                },
+            )
+        ]
 
     asyncio.run(_run())
 
@@ -67,12 +83,48 @@ def test_prepare_stream_events_not_found():
     svc = InterviewSessionAppService(Registry())
 
     async def _run():
-        try:
+        with pytest.raises(InterviewRouteError) as exc:
             await svc.prepare_stream_events("sess-1", "alice", None)
-            assert False, "should raise"
-        except InterviewRouteError as e:
-            assert e.status_code == 404
-            assert e.error_code == "SESSION_NOT_FOUND"
+        assert exc.value.status_code == 404
+        assert exc.value.error_code == "SESSION_NOT_FOUND"
+
+    asyncio.run(_run())
+
+
+def test_prepare_stream_events_parses_last_event_id():
+    q: asyncio.Queue = asyncio.Queue()
+
+    class Registry:
+        async def get(self, _session_id):
+            return SimpleNamespace(active=True, username="alice", thread_id="t-1")
+
+        async def subscribe(self, _session_id, _resume):
+            assert _resume == 42
+            return q
+
+    svc = InterviewSessionAppService(Registry())
+
+    async def _run():
+        record, resume_from, queue = await svc.prepare_stream_events("sess-1", "alice", "42")
+        assert record.username == "alice"
+        assert resume_from == 42
+        assert queue is q
+
+    asyncio.run(_run())
+
+
+def test_get_owned_active_record_forbidden_username():
+    class Registry:
+        async def get(self, _session_id):
+            return SimpleNamespace(active=True, username="alice")
+
+    svc = InterviewSessionAppService(Registry())
+
+    async def _run():
+        with pytest.raises(InterviewRouteError) as exc:
+            await svc.get_owned_active_record("sess-1", "bob")
+        assert exc.value.status_code == 403
+        assert exc.value.error_code == "FORBIDDEN_USERNAME"
 
     asyncio.run(_run())
 
@@ -123,6 +175,7 @@ def test_iter_stream_events_heartbeat_then_idle_timeout():
             idle_timeout_seconds=1,
         ):
             got.append(evt)
+
         assert got[0]["event"] == "connected"
         assert got[1]["event"] == "context"
         assert any(x["event"] == "completed" and x["payload"].get("status") == "idle_timeout" for x in got)

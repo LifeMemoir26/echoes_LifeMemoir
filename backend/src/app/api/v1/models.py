@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 DataT = TypeVar("DataT")
@@ -54,13 +54,29 @@ class SessionActionData(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class KnowledgeWorkflowStats(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    events_count: int = 0
+    chunks_count: int = 0
+
+
+class KnowledgeWorkflowResult(BaseModel):
+    """Typed surface of knowledge workflow output while allowing extra fields."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str | None = None
+    knowledge_graph: KnowledgeWorkflowStats = Field(default_factory=KnowledgeWorkflowStats)
+
+
 class KnowledgeProcessData(BaseModel):
     username: str
     original_filename: str
     stored_path: str
     uploaded_at: datetime
     trace_id: str
-    workflow_result: dict[str, Any] = Field(default_factory=dict)
+    workflow_result: KnowledgeWorkflowResult = Field(default_factory=KnowledgeWorkflowResult)
 
 
 class TimelineGenerateRequest(BaseModel):
@@ -91,13 +107,6 @@ class MemoirGenerateData(BaseModel):
     length: int
     generated_at: datetime
     trace_id: str
-
-
-class SseEventPayload(BaseModel):
-    event: str
-    session_id: str
-    trace_id: str
-    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 # ------------------------------------------------------------------
