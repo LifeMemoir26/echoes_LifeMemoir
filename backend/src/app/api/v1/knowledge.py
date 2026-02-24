@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import logging
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import re
 from typing import Annotated, Any
 
-logger = logging.getLogger(__name__)
-
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
 
-from src.application.knowledge.api import process_knowledge_file
 from src.application.knowledge.query_service import KnowledgeQueryService
-from src.core.paths import get_data_root
 
 from .material_registry import material_registry
 
@@ -101,98 +94,48 @@ async def process_knowledge_upload(
             trace_id=trace_id,
         )
 
-    uploaded_at = datetime.now(timezone.utc)
-    data_root = get_data_root()
-    target_dir = (data_root / safe_username / "materials").resolve()
     try:
-        target_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
+        upload_result = await _service.process_uploaded_knowledge_file(
+            username=safe_username,
+            upload=file,
+            trace_id=trace_id,
+            max_upload_bytes=_MAX_UPLOAD_BYTES,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        if code == "UPLOAD_FILE_REQUIRED":
+            raise error_response(422, "UPLOAD_FILE_REQUIRED", "file is required", trace_id)
+        if code == "UPLOAD_TOO_LARGE":
+            raise error_response(413, "UPLOAD_TOO_LARGE", f"file exceeds {_MAX_UPLOAD_BYTES} bytes", trace_id)
+        if code == "INVALID_STORAGE_PATH":
+            raise error_response(400, "INVALID_STORAGE_PATH", "resolved storage path is outside data root", trace_id)
+        raise
+    except OSError as exc:
+        raise error_response(500, "STORAGE_INIT_FAILED", f"failed to create storage directory: {exc}", trace_id) from exc
+
+    result = upload_result["workflow_result"]
+    if result.get("status") == "failed":
+        app_error = normalize_workflow_failure(
+            result,
+            default_code="KNOWLEDGE_PROCESS_FAILED",
+            default_message="knowledge workflow failed",
+            trace_id=trace_id,
+        )
         raise error_response(
             status_code=500,
-            error_code="STORAGE_INIT_FAILED",
-            error_message=f"failed to create storage directory: {exc}",
-            trace_id=trace_id,
-        ) from exc
-
-    if not str(target_dir).startswith(str(data_root.resolve())):
-        raise error_response(
-            status_code=400,
-            error_code="INVALID_STORAGE_PATH",
-            error_message="resolved storage path is outside data root",
-            trace_id=trace_id,
+            error_code=app_error.error_code,
+            error_message=app_error.error_message,
+            retryable=app_error.retryable,
+            trace_id=app_error.trace_id,
         )
-
-    suffix = Path(file.filename).suffix.lower() or ".txt"
-    stored_name = f"upload-{uploaded_at.strftime('%Y%m%dT%H%M%S%f')}{suffix}"
-    stored_path = (target_dir / stored_name).resolve()
-
-    bytes_written = 0
-    try:
-        with stored_path.open("wb") as out:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                bytes_written += len(chunk)
-                if bytes_written > _MAX_UPLOAD_BYTES:
-                    raise error_response(
-                        status_code=413,
-                        error_code="UPLOAD_TOO_LARGE",
-                        error_message=f"file exceeds {_MAX_UPLOAD_BYTES} bytes",
-                        trace_id=trace_id,
-                    )
-                out.write(chunk)
-    except Exception:
-        if stored_path.exists():
-            stored_path.unlink(missing_ok=True)
-        raise
-    finally:
-        await file.close()
-
-    metadata_record = {
-        "uploaded_at": uploaded_at.isoformat(),
-        "original_filename": file.filename,
-        "stored_path": str(stored_path),
-        "size_bytes": bytes_written,
-        "trace_id": trace_id,
-    }
-    metadata_path = target_dir / "uploads.jsonl"
-
-    try:
-        result = await process_knowledge_file(
-            file_path=stored_path,
-            username=safe_username,
-        )
-        if result.get("status") == "failed":
-            app_error = normalize_workflow_failure(
-                result,
-                default_code="KNOWLEDGE_PROCESS_FAILED",
-                default_message="knowledge workflow failed",
-                trace_id=trace_id,
-            )
-            stored_path.unlink(missing_ok=True)
-            raise error_response(
-                status_code=500,
-                error_code=app_error.error_code,
-                error_message=app_error.error_message,
-                retryable=app_error.retryable,
-                trace_id=app_error.trace_id,
-            )
-
-        with metadata_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(metadata_record, ensure_ascii=False) + "\n")
-    except Exception:
-        if stored_path.exists():
-            stored_path.unlink(missing_ok=True)
-        raise
 
     return ApiResponse(
         status="success",
         data=KnowledgeProcessData(
             username=safe_username,
-            original_filename=file.filename,
-            stored_path=str(stored_path),
-            uploaded_at=uploaded_at,
+            original_filename=upload_result["original_filename"],
+            stored_path=upload_result["stored_path"],
+            uploaded_at=upload_result["uploaded_at"],
             trace_id=trace_id,
             workflow_result=result,
         ),
@@ -326,100 +269,7 @@ async def delete_material(
 # Material re-processing (SSE streaming)
 # ------------------------------------------------------------------
 
-_STAGE_LABELS: dict[str, str] = {
-    "ingest": "读取文件",
-    "extract": "提取事件",
-    "vectorize": "向量化",
-    "finalize": "完成",
-}
-
 _SSE_HEARTBEAT_SECONDS = 15
-
-
-async def _reprocess_bg(
-    material_id: str,
-    file_path: Path,
-    username: str,
-    material_context: str,
-    material_type: str,
-    trace_id: str,
-) -> None:
-    """Background task: run knowledge workflow and publish stage events to registry."""
-    from src.application.workflows import WorkflowFacade
-
-    db_client = SQLiteClient(username=username)
-    facade = WorkflowFacade(username=username)
-    try:
-        workflow = facade._get_knowledge_workflow()
-        thread_id = trace_id
-
-        async for chunk in run_knowledge_file_stream(
-            workflow,
-            file_path=file_path,
-            username=username,
-            thread_id=thread_id,
-            material_type=material_type,
-            material_context=material_context,
-            material_id=material_id,
-        ):
-            node_name: str = chunk.get("node", "")
-            output: dict[str, Any] = chunk.get("output", {})
-
-            if output.get("status") == "failed":
-                await material_registry.publish(
-                    material_id,
-                    "error",
-                    {"stage": node_name, "message": str(output.get("errors", "unknown error")), "at": datetime.now(timezone.utc).isoformat()},
-                )
-                db_client.update_material_status(material_id=material_id, status="failed")
-                return
-
-            stage_label = _STAGE_LABELS.get(node_name, node_name)
-            await material_registry.publish(
-                material_id,
-                "status",
-                {"stage": node_name, "label": stage_label, "at": datetime.now(timezone.utc).isoformat()},
-            )
-
-        # Workflow completed successfully
-        kg_stats = {}
-        vec_stats = {}
-        # Re-read final state from DB (already updated by workflow finalize node)
-        row = db_client.get_material_by_id(material_id)
-        if row:
-            kg_stats = {"events_count": row.get("events_count", 0)}
-            vec_stats = {"chunks_count": row.get("chunks_count", 0)}
-
-        await material_registry.publish(
-            material_id,
-            "completed",
-            {
-                "events_count": kg_stats.get("events_count", 0),
-                "chunks_count": vec_stats.get("chunks_count", 0),
-                "at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-        db_client.update_material_status(
-            material_id=material_id,
-            status="done",
-            events_count=kg_stats.get("events_count", 0),
-            chunks_count=vec_stats.get("chunks_count", 0),
-        )
-
-    except Exception as exc:
-        logger.error("_reprocess_bg failed for material %s: %s", material_id, exc, exc_info=True)
-        try:
-            await material_registry.publish(
-                material_id,
-                "error",
-                {"stage": "unknown", "message": str(exc), "at": datetime.now(timezone.utc).isoformat()},
-            )
-            db_client.update_material_status(material_id=material_id, status="failed")
-        except Exception:
-            logger.warning("Failed to publish error event for material %s", material_id, exc_info=True)
-    finally:
-        facade.close()
-        await material_registry.cleanup(material_id)
 
 
 @router.post("/knowledge/materials/{material_id}/reprocess", response_model=ApiResponse[dict])

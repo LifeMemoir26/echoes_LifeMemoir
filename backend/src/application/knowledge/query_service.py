@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,6 +71,72 @@ class KnowledgeQueryService:
             "worldview": profile.worldview if profile else "",
         }
 
+
+
+    async def process_uploaded_knowledge_file(
+        self,
+        username: str,
+        upload: Any,
+        trace_id: str,
+        max_upload_bytes: int,
+    ) -> dict[str, Any]:
+        if not upload.filename:
+            raise ValueError("UPLOAD_FILE_REQUIRED")
+
+        uploaded_at = datetime.now(timezone.utc)
+        data_root = get_data_root()
+        target_dir = (data_root / username / "materials").resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        if not str(target_dir).startswith(str(data_root.resolve())):
+            raise ValueError("INVALID_STORAGE_PATH")
+
+        suffix = Path(upload.filename).suffix.lower() or ".txt"
+        stored_name = f"upload-{uploaded_at.strftime('%Y%m%dT%H%M%S%f')}{suffix}"
+        stored_path = (target_dir / stored_name).resolve()
+
+        bytes_written = 0
+        try:
+            with stored_path.open("wb") as out:
+                while True:
+                    chunk = await upload.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    bytes_written += len(chunk)
+                    if bytes_written > max_upload_bytes:
+                        raise ValueError("UPLOAD_TOO_LARGE")
+                    out.write(chunk)
+        except Exception:
+            if stored_path.exists():
+                stored_path.unlink(missing_ok=True)
+            raise
+        finally:
+            await upload.close()
+
+        metadata_record = {
+            "uploaded_at": uploaded_at.isoformat(),
+            "original_filename": upload.filename,
+            "stored_path": str(stored_path),
+            "size_bytes": bytes_written,
+            "trace_id": trace_id,
+        }
+        metadata_path = target_dir / "uploads.jsonl"
+
+        try:
+            result = await process_knowledge_file(file_path=stored_path, username=username)
+            with metadata_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(metadata_record, ensure_ascii=False) + "\n")
+        except Exception:
+            if stored_path.exists():
+                stored_path.unlink(missing_ok=True)
+            raise
+
+        return {
+            "uploaded_at": uploaded_at,
+            "stored_path": str(stored_path),
+            "workflow_result": result,
+            "original_filename": upload.filename,
+        }
     async def upload_materials(
         self,
         username: str,
