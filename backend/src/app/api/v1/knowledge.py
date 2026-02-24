@@ -315,6 +315,16 @@ async def stream_material_events(
 ) -> StreamingResponse:
     """SSE stream for material processing progress (ingest→extract→vectorize→finalize)."""
 
+    trace_id = new_trace_id("material-events")
+    row = _service.get_material(current_username, material_id)
+    if not row:
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_NOT_FOUND",
+            error_message=f"material {material_id} not found",
+            trace_id=trace_id,
+        )
+
     async def event_stream():
         queue = await material_registry.subscribe(material_id)
         try:

@@ -75,7 +75,12 @@ export async function connectInterviewSse(
     if (text) {
       let parsed: ReturnType<typeof parseEnvelope<Record<string, unknown>>> | null = null;
       try {
-        parsed = parseEnvelope<Record<string, unknown>>(JSON.parse(text));
+        const json = JSON.parse(text) as Record<string, unknown>;
+        const unwrapped =
+          json && typeof json === "object" && "detail" in json
+            ? (json.detail as Record<string, unknown>)
+            : json;
+        parsed = parseEnvelope<Record<string, unknown>>(unwrapped);
       } catch {
         parsed = null;
       }
