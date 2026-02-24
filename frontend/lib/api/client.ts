@@ -169,8 +169,8 @@ async function requestJson<TData>(input: RequestInfo | URL, init: RequestInit): 
   }
 
   const envelope = await parseResponseToEnvelope<TData>(response);
-  if (envelope.status === "success" && envelope.data) {
-    return envelope.data;
+  if (envelope.status === "success") {
+    return envelope.data as TData;
   }
 
   throwFirstApiErrorOrContract(envelope);

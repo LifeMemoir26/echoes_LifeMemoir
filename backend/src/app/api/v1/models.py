@@ -105,16 +105,24 @@ class SseEventPayload(BaseModel):
 # ------------------------------------------------------------------
 
 
-class RegisterData(BaseModel):
+class RegisterRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(default="")
 
 
-class LoginData(BaseModel):
+class RegisterData(BaseModel):
+    username: str
+
+
+class LoginRequest(BaseModel):
     username: str = Field(default="")
     password: str = Field(default="")
+
+
+class LoginData(BaseModel):
     access_token: str = Field(default="")
     token_type: str = Field(default="bearer")
+    username: str = Field(default="")
 
 
 # ------------------------------------------------------------------

@@ -53,6 +53,26 @@ export type SessionCreateRequest = {
   username: string;
 };
 
+export type RegisterRequest = {
+  username: string;
+  password: string;
+};
+
+export type RegisterData = {
+  username: string;
+};
+
+export type LoginRequest = {
+  username: string;
+  password: string;
+};
+
+export type LoginData = {
+  access_token: string;
+  token_type: string;
+  username: string;
+};
+
 export type SessionCreateData = {
   session_id: string;
   thread_id: string;
@@ -72,6 +92,15 @@ export type SessionActionData = {
   status: string;
   trace_id: string;
   details: Record<string, unknown>;
+};
+
+export type KnowledgeProcessData = {
+  username: string;
+  original_filename: string;
+  stored_path: string;
+  uploaded_at: string;
+  trace_id: string;
+  workflow_result: Record<string, unknown>;
 };
 
 export type SessionCloseData = SessionActionData;
@@ -161,6 +190,13 @@ export type InterviewSseEnvelope<TType extends InterviewSseEventType = Interview
   data: InterviewSsePayloadMap[TType];
 };
 
+export type SseEventPayload = {
+  event: string;
+  session_id: string;
+  trace_id: string;
+  payload: Record<string, unknown>;
+};
+
 export type NormalizedApiError = {
   code: string;
   message: string;
@@ -170,6 +206,20 @@ export type NormalizedApiError = {
 };
 
 // ── Knowledge domain types ──────────────────────────────────
+
+export type RecordItem = {
+  chunk_id: number;
+  chunk_source: string | null;
+  preview: string;
+  total_chars: number;
+  chunk_index: number;
+  created_at: string;
+  is_structured: boolean;
+};
+
+export type RecordsListData = {
+  records: RecordItem[];
+};
 
 export type EventItem = {
   id: number;

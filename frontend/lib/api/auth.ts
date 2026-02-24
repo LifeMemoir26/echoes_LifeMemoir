@@ -1,24 +1,15 @@
 import { apiPost } from "@/lib/api/client";
+import type { LoginData, LoginRequest, RegisterData, RegisterRequest } from "@/lib/api/types";
 
-export interface LoginResponse {
-  access_token: string;
-  token_type: string;
-  username: string;
-}
-
-export interface RegisterResponse {
-  username: string;
-}
-
-export async function login(username: string, password: string): Promise<LoginResponse> {
-  return apiPost<LoginResponse, { username: string; password: string }>("/auth/login", {
+export async function login(username: string, password: string): Promise<LoginData> {
+  return apiPost<LoginData, LoginRequest>("/auth/login", {
     username,
     password
   });
 }
 
-export async function register(username: string, password: string): Promise<RegisterResponse> {
-  return apiPost<RegisterResponse, { username: string; password: string }>("/auth/register", {
+export async function register(username: string, password: string): Promise<RegisterData> {
+  return apiPost<RegisterData, RegisterRequest>("/auth/register", {
     username,
     password
   });

@@ -7,14 +7,14 @@ from fastapi import APIRouter
 from src.application.auth import AuthService
 
 from .errors import error_response, new_trace_id
-from .models import ApiResponse, LoginData, RegisterData
+from .models import ApiResponse, LoginData, LoginRequest, RegisterData, RegisterRequest
 
 router = APIRouter()
 _service = AuthService()
 
 
 @router.post("/auth/register", response_model=ApiResponse[RegisterData], status_code=201)
-async def register(body: RegisterData) -> ApiResponse[RegisterData]:
+async def register(body: RegisterRequest) -> ApiResponse[RegisterData]:
     trace_id = new_trace_id("auth")
     try:
         username = _service.register(body.username, body.password)
@@ -42,11 +42,11 @@ async def register(body: RegisterData) -> ApiResponse[RegisterData]:
                 trace_id=trace_id,
             )
         raise
-    return ApiResponse(status="success", data=RegisterData(username=username, password=""))
+    return ApiResponse(status="success", data=RegisterData(username=username))
 
 
 @router.post("/auth/login", response_model=ApiResponse[LoginData])
-async def login(body: LoginData) -> ApiResponse[LoginData]:
+async def login(body: LoginRequest) -> ApiResponse[LoginData]:
     trace_id = new_trace_id("auth")
     try:
         username, token = _service.login(body.username, body.password)
