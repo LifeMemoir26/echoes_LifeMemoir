@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any
 
 from src.application.interview.session import (
@@ -15,9 +16,68 @@ from src.application.interview.session import (
 from src.core.config import get_settings
 
 
+@dataclass(slots=True)
+class InterviewRouteError(Exception):
+    status_code: int
+    error_code: str
+    error_message: str
+    trace_id: str
+    retryable: bool = False
+
+
 class InterviewSessionAppService:
     def __init__(self, registry: Any) -> None:
         self.registry = registry
+
+    async def get_owned_active_record(self, session_id: str, current_username: str) -> Any:
+        record = await self.registry.get(session_id)
+        trace_id = f"session-{session_id}"
+        if record is None or not record.active:
+            raise InterviewRouteError(
+                status_code=404,
+                error_code="SESSION_NOT_FOUND",
+                error_message="session does not exist or has expired",
+                trace_id=trace_id,
+            )
+        if current_username != record.username:
+            raise InterviewRouteError(
+                status_code=403,
+                error_code="FORBIDDEN_USERNAME",
+                error_message="token username does not match session owner",
+                trace_id=trace_id,
+            )
+        return record
+
+    async def toggle_pending_event_priority(self, session_id: str, event_id: str, current_username: str) -> tuple[Any, bool]:
+        record = await self.get_owned_active_record(session_id, current_username)
+        isession = record.interview_session
+        storage = isession.runtime.storage
+
+        event = await storage.get_pending_event(event_id)
+        if event is None:
+            raise InterviewRouteError(
+                status_code=404,
+                error_code="EVENT_NOT_FOUND",
+                error_message=f"pending event {event_id} not found",
+                trace_id=f"session-{session_id}",
+            )
+
+        new_priority = not event.is_priority
+        await storage.set_pending_event_priority(event_id, new_priority)
+        await storage.reorder_pending_events()
+
+        pending_summary = await isession.get_pending_events_summary()
+        await self.registry.publish(
+            session_id,
+            "context",
+            {
+                "trace_id": record.thread_id,
+                "partial": "pending_events",
+                "pending_events": pending_summary,
+                "at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        return record, new_priority
 
     async def create_session(self, username: str) -> tuple[Any | None, Any | None, str, Any | None]:
         trace_id = f"session-{uuid.uuid4().hex[:12]}"
