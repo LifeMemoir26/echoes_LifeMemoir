@@ -2,17 +2,26 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { connectInterviewSse } from "@/lib/api/interview";
-import { normalizeInterviewSseError, normalizeUnknownError } from "@/lib/api/client";
+import {
+  normalizeInterviewSseError,
+  normalizeUnknownError,
+} from "@/lib/api/client";
 import type {
   InterviewSseEnvelope,
   InterviewStreamCompleted,
   InterviewStreamContext,
   InterviewStreamError,
   InterviewStreamStatus,
-  NormalizedApiError
+  NormalizedApiError,
 } from "@/lib/api/types";
 
-type ConnectionState = "idle" | "connecting" | "ready" | "reconnecting" | "closed" | "fatal";
+type ConnectionState =
+  | "idle"
+  | "connecting"
+  | "ready"
+  | "reconnecting"
+  | "closed"
+  | "fatal";
 
 const RETRY_MS = [1000, 2000, 4000, 8000, 15000] as const;
 
@@ -21,22 +30,33 @@ function isAbortLikeError(raw: unknown): boolean {
     return false;
   }
 
-  const name = "name" in raw ? String((raw as { name?: unknown }).name ?? "") : "";
-  const message = "message" in raw ? String((raw as { message?: unknown }).message ?? "") : "";
+  const name =
+    "name" in raw ? String((raw as { name?: unknown }).name ?? "") : "";
+  const message =
+    "message" in raw
+      ? String((raw as { message?: unknown }).message ?? "")
+      : "";
 
   if (name === "AbortError") {
     return true;
   }
 
-  return /aborted|aborterror|bodystreambuffer was aborted/i.test(`${name} ${message}`);
+  return /aborted|aborterror|bodystreambuffer was aborted/i.test(
+    `${name} ${message}`,
+  );
 }
 
 export function useInterviewEvents(sessionId: string | null) {
-  const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>("idle");
   const [events, setEvents] = useState<InterviewSseEnvelope[]>([]);
-  const [statusEvent, setStatusEvent] = useState<InterviewStreamStatus | null>(null);
-  const [contextEvent, setContextEvent] = useState<InterviewStreamContext | null>(null);
-  const [completedEvent, setCompletedEvent] = useState<InterviewStreamCompleted | null>(null);
+  const [statusEvent, setStatusEvent] = useState<InterviewStreamStatus | null>(
+    null,
+  );
+  const [contextEvent, setContextEvent] =
+    useState<InterviewStreamContext | null>(null);
+  const [completedEvent, setCompletedEvent] =
+    useState<InterviewStreamCompleted | null>(null);
   const [error, setError] = useState<NormalizedApiError | null>(null);
   const [lastEventId, setLastEventId] = useState<string | null>(null);
 
@@ -81,7 +101,10 @@ export function useInterviewEvents(sessionId: string | null) {
       if (incoming.event === "completed") {
         const completed = incoming.data as InterviewStreamCompleted;
         setCompletedEvent(completed);
-        if (completed.status === "session_closed" || completed.status === "idle_timeout") {
+        if (
+          completed.status === "session_closed" ||
+          completed.status === "idle_timeout"
+        ) {
           shouldStopRef.current = true;
           cleanup();
           setConnectionState("closed");
@@ -93,8 +116,12 @@ export function useInterviewEvents(sessionId: string | null) {
         setError(normalizeInterviewSseError(eventError));
       }
     },
-    [cleanup]
+    [cleanup],
   );
+
+  // Use a ref so the recursive setTimeout can always reach the latest `connect` without
+  // the function needing to reference itself before declaration (react-hooks/immutability).
+  const connectRef = useRef<(() => Promise<void>) | null>(null);
 
   const connect = useCallback(async () => {
     if (!sessionId || shouldStopRef.current) {
@@ -102,15 +129,16 @@ export function useInterviewEvents(sessionId: string | null) {
     }
 
     try {
-      const nextState = reconnectAttemptRef.current > 0 ? "reconnecting" : "connecting";
+      const nextState =
+        reconnectAttemptRef.current > 0 ? "reconnecting" : "connecting";
       setConnectionState(nextState);
       setError(null);
       const handle = await connectInterviewSse(
         {
           sessionId,
-          lastEventId: lastEventIdRef.current ?? undefined
+          lastEventId: lastEventIdRef.current ?? undefined,
         },
-        handleEvent
+        handleEvent,
       );
       streamCloserRef.current = handle.close;
       if (shouldStopRef.current) {
@@ -126,10 +154,11 @@ export function useInterviewEvents(sessionId: string | null) {
       }
 
       setConnectionState("reconnecting");
-      const delay = RETRY_MS[Math.min(reconnectAttemptRef.current, RETRY_MS.length - 1)];
+      const delay =
+        RETRY_MS[Math.min(reconnectAttemptRef.current, RETRY_MS.length - 1)];
       reconnectAttemptRef.current += 1;
       reconnectTimerRef.current = setTimeout(() => {
-        void connect();
+        void connectRef.current?.();
       }, delay);
     } catch (raw) {
       if (shouldStopRef.current || isAbortLikeError(raw)) {
@@ -147,13 +176,20 @@ export function useInterviewEvents(sessionId: string | null) {
       }
 
       setConnectionState("reconnecting");
-      const delay = RETRY_MS[Math.min(reconnectAttemptRef.current, RETRY_MS.length - 1)];
+      const delay =
+        RETRY_MS[Math.min(reconnectAttemptRef.current, RETRY_MS.length - 1)];
       reconnectAttemptRef.current += 1;
       reconnectTimerRef.current = setTimeout(() => {
-        void connect();
+        void connectRef.current?.();
       }, delay);
     }
   }, [handleEvent, sessionId]);
+
+  // Keep ref in sync so recursive setTimeout and reconnectNow always invoke the latest version.
+  // Must be in an effect — refs cannot be written during render (react-hooks/refs).
+  useEffect(() => {
+    connectRef.current = connect;
+  });
 
   const reconnectNow = useCallback(() => {
     if (!sessionId) {
@@ -162,8 +198,8 @@ export function useInterviewEvents(sessionId: string | null) {
     shouldStopRef.current = false;
     reconnectAttemptRef.current = 0;
     cleanup();
-    void connect();
-  }, [cleanup, connect, sessionId]);
+    void connectRef.current?.();
+  }, [cleanup, sessionId]);
 
   const disconnect = useCallback(() => {
     shouldStopRef.current = true;
@@ -171,38 +207,57 @@ export function useInterviewEvents(sessionId: string | null) {
     setConnectionState("closed");
   }, [cleanup]);
 
-  useEffect(() => {
-    cleanup();
-    shouldStopRef.current = false;
-    reconnectAttemptRef.current = 0;
-
+  // Reset all stream state when sessionId changes (render-time to satisfy react-hooks/set-state-in-effect)
+  const [prevSessionId, setPrevSessionId] = useState<string | null>(null);
+  if (sessionId !== prevSessionId) {
+    setPrevSessionId(sessionId);
     setEvents([]);
     setStatusEvent(null);
     setContextEvent(null);
     setCompletedEvent(null);
     setError(null);
     setLastEventId(null);
+    if (!sessionId) {
+      setConnectionState("idle");
+    }
+  }
+
+  // Side-effects for sessionId change: cleanup old connection & start new one
+  useEffect(() => {
+    cleanup();
+    shouldStopRef.current = false;
+    reconnectAttemptRef.current = 0;
     lastEventIdRef.current = null;
 
     if (!sessionId) {
-      setConnectionState("idle");
       return;
     }
 
-    void connect();
+    void connectRef.current?.();
     return () => {
       shouldStopRef.current = true;
       cleanup();
     };
-  }, [cleanup, connect, sessionId]);
+  }, [cleanup, sessionId]);
 
   const summary = useMemo(
     () => ({
       eventCount: events.length,
       lastStatus: statusEvent?.status ?? completedEvent?.status ?? null,
-      lastTraceId: statusEvent?.trace_id ?? contextEvent?.trace_id ?? completedEvent?.trace_id ?? null
+      lastTraceId:
+        statusEvent?.trace_id ??
+        contextEvent?.trace_id ??
+        completedEvent?.trace_id ??
+        null,
     }),
-    [completedEvent?.status, completedEvent?.trace_id, contextEvent?.trace_id, events.length, statusEvent?.status, statusEvent?.trace_id]
+    [
+      completedEvent?.status,
+      completedEvent?.trace_id,
+      contextEvent?.trace_id,
+      events.length,
+      statusEvent?.status,
+      statusEvent?.trace_id,
+    ],
   );
 
   return {
@@ -215,6 +270,6 @@ export function useInterviewEvents(sessionId: string | null) {
     lastEventId,
     summary,
     reconnectNow,
-    disconnect
+    disconnect,
   };
 }

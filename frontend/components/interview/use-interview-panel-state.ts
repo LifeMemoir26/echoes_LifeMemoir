@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
-import type { EventSupplementItem, InterviewStreamContext, PendingEventDetail } from "@/lib/api/types";
+import { useCallback, useState } from "react";
+import type {
+  EventSupplementItem,
+  InterviewStreamContext,
+  PendingEventDetail,
+} from "@/lib/api/types";
 import { togglePendingEventPriority } from "@/lib/api/interview";
 
-export function useInterviewPanelState(contextEvent: InterviewStreamContext | null, sessionId?: string | null, isConnected?: boolean) {
+export function useInterviewPanelState(
+  contextEvent: InterviewStreamContext | null,
+  sessionId?: string | null,
+  isConnected?: boolean,
+) {
   const [supplements, setSupplements] = useState<EventSupplementItem[]>([]);
   const [pendingEvents, setPendingEvents] = useState<PendingEventDetail[]>([]);
   const [positiveTriggers, setPositiveTriggers] = useState<string[]>([]);
@@ -25,51 +33,50 @@ export function useInterviewPanelState(contextEvent: InterviewStreamContext | nu
     });
   }, []);
 
-  useEffect(() => {
-    if (!contextEvent) return;
+  // Derive state from contextEvent during render (avoids setState-in-effect)
+  const [prevContextEvent, setPrevContextEvent] =
+    useState<InterviewStreamContext | null>(null);
+  if (contextEvent && contextEvent !== prevContextEvent) {
+    setPrevContextEvent(contextEvent);
 
     if (contextEvent.partial === "pending_events") {
       const events = contextEvent.pending_events?.events ?? [];
       setPendingEvents(events);
       setPendingEventsLoaded(true);
       pruneExpandedIds(events);
-      return;
-    }
-
-    if (contextEvent.partial === "supplements") {
+    } else if (contextEvent.partial === "supplements") {
       setSupplements(contextEvent.event_supplements ?? []);
       setSupplementsLoaded(true);
-      return;
-    }
-
-    if (contextEvent.partial === "anchors") {
+    } else if (contextEvent.partial === "anchors") {
       setPositiveTriggers(contextEvent.positive_triggers ?? []);
       setSensitiveTopics(contextEvent.sensitive_topics ?? []);
       setAnchorsLoaded(true);
-      return;
+    } else {
+      // Full update (no partial field) — backward-compatible path
+      setSupplements(contextEvent.event_supplements ?? []);
+      setSupplementsLoaded(true);
+      setPositiveTriggers(contextEvent.positive_triggers ?? []);
+      setSensitiveTopics(contextEvent.sensitive_topics ?? []);
+      setAnchorsLoaded(true);
+
+      const events = contextEvent.pending_events?.events ?? [];
+      setPendingEvents(events);
+      setPendingEventsLoaded(true);
+      pruneExpandedIds(events);
     }
+  }
 
-    // Full update (no partial field) — backward-compatible path
-    setSupplements(contextEvent.event_supplements ?? []);
-    setSupplementsLoaded(true);
-    setPositiveTriggers(contextEvent.positive_triggers ?? []);
-    setSensitiveTopics(contextEvent.sensitive_topics ?? []);
-    setAnchorsLoaded(true);
-
-    const events = contextEvent.pending_events?.events ?? [];
-    setPendingEvents(events);
-    setPendingEventsLoaded(true);
-    pruneExpandedIds(events);
-  }, [contextEvent, pruneExpandedIds]);
-
-  // Reset per-panel loading flags when a new session is created
-  useEffect(() => {
+  // Reset per-panel loading flags when a new session is created (render-time)
+  const [prevSessionKey, setPrevSessionKey] = useState<string | null>(null);
+  const sessionKey = isConnected ? (sessionId ?? "__connected__") : null;
+  if (sessionKey !== prevSessionKey) {
+    setPrevSessionKey(sessionKey);
     if (isConnected) {
       setSupplementsLoaded(false);
       setPendingEventsLoaded(false);
       setAnchorsLoaded(false);
     }
-  }, [sessionId, isConnected]);
+  }
 
   const handleToggle = useCallback((id: string) => {
     setExpandedIds((prev) => {
@@ -85,7 +92,9 @@ export function useInterviewPanelState(contextEvent: InterviewStreamContext | nu
       if (!sessionId) return;
       // Optimistic: flip locally for instant feedback
       setPendingEvents((prev) =>
-        prev.map((e) => (e.id === eventId ? { ...e, is_priority: !e.is_priority } : e)),
+        prev.map((e) =>
+          e.id === eventId ? { ...e, is_priority: !e.is_priority } : e,
+        ),
       );
       // Fire-and-forget; SSE will push the authoritative list
       togglePendingEventPriority(sessionId, eventId).catch(() => {

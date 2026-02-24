@@ -12,18 +12,18 @@ import { microRebound, snappy } from "@/lib/motion/spring";
 
 const NAV_TABS = [
   { label: "主页", href: "/" },
-  { label: "采访", href: "/interview" }
+  { label: "采访", href: "/interview" },
 ] as const;
 
 const KNOWLEDGE_ITEMS = [
   { label: "资料文件", href: "/knowledge" },
   { label: "人生事件", href: "/knowledge/events" },
-  { label: "人物侧写", href: "/knowledge/profile" }
+  { label: "人物侧写", href: "/knowledge/profile" },
 ] as const;
 
 const TIME_ITEMS = [
   { label: "时间轴", href: "/timeline" },
-  { label: "回忆录", href: "/memoir" }
+  { label: "回忆录", href: "/memoir" },
 ] as const;
 
 function isKnowledgeActive(pathname: string) {
@@ -56,10 +56,16 @@ export function AppNav() {
   // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (knowledgeDropdownRef.current && !knowledgeDropdownRef.current.contains(e.target as Node)) {
+      if (
+        knowledgeDropdownRef.current &&
+        !knowledgeDropdownRef.current.contains(e.target as Node)
+      ) {
         setKnowledgeDropdownOpen(false);
       }
-      if (timeDropdownRef.current && !timeDropdownRef.current.contains(e.target as Node)) {
+      if (
+        timeDropdownRef.current &&
+        !timeDropdownRef.current.contains(e.target as Node)
+      ) {
         setTimeDropdownOpen(false);
       }
     };
@@ -67,18 +73,20 @@ export function AppNav() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Close dropdowns on route change
-  useEffect(() => {
+  // Close dropdowns on route change (render-time, avoids setState-in-effect)
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
     setKnowledgeDropdownOpen(false);
     setTimeDropdownOpen(false);
-  }, [pathname]);
+  }
 
   const tabClass = "relative py-1 transition-colors duration-150";
 
   const renderDropdown = (
     items: readonly { label: string; href: string }[],
     isOpen: boolean,
-    dropdownKey: string
+    dropdownKey: string,
   ) => (
     <AnimatePresence>
       {isOpen && (
@@ -141,13 +149,18 @@ export function AppNav() {
         <div ref={knowledgeDropdownRef} className="relative">
           <button
             type="button"
-            onClick={() => { setKnowledgeDropdownOpen((v) => !v); setTimeDropdownOpen(false); }}
+            onClick={() => {
+              setKnowledgeDropdownOpen((v) => !v);
+              setTimeDropdownOpen(false);
+            }}
             className={`flex cursor-pointer items-center gap-1 ${tabClass} ${isKnowledgeActive(pathname) ? "text-[#A2845E]" : "text-slate-500 hover:text-slate-800"}`}
             aria-expanded={knowledgeDropdownOpen}
             aria-haspopup="true"
           >
             知识库
-            <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-150 ${knowledgeDropdownOpen ? "rotate-180" : ""}`} />
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform duration-150 ${knowledgeDropdownOpen ? "rotate-180" : ""}`}
+            />
             {isKnowledgeActive(pathname) && (
               <motion.span
                 layoutId="nav-indicator"
@@ -156,20 +169,29 @@ export function AppNav() {
               />
             )}
           </button>
-          {renderDropdown(KNOWLEDGE_ITEMS, knowledgeDropdownOpen, "knowledge-dropdown")}
+          {renderDropdown(
+            KNOWLEDGE_ITEMS,
+            knowledgeDropdownOpen,
+            "knowledge-dropdown",
+          )}
         </div>
 
         {/* 时光 dropdown */}
         <div ref={timeDropdownRef} className="relative">
           <button
             type="button"
-            onClick={() => { setTimeDropdownOpen((v) => !v); setKnowledgeDropdownOpen(false); }}
+            onClick={() => {
+              setTimeDropdownOpen((v) => !v);
+              setKnowledgeDropdownOpen(false);
+            }}
             className={`flex cursor-pointer items-center gap-1 ${tabClass} ${isTimeActive(pathname) ? "text-[#A2845E]" : "text-slate-500 hover:text-slate-800"}`}
             aria-expanded={timeDropdownOpen}
             aria-haspopup="true"
           >
             时光
-            <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-150 ${timeDropdownOpen ? "rotate-180" : ""}`} />
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform duration-150 ${timeDropdownOpen ? "rotate-180" : ""}`}
+            />
             {isTimeActive(pathname) && (
               <motion.span
                 layoutId="nav-indicator"
@@ -184,10 +206,13 @@ export function AppNav() {
 
       {/* User + logout */}
       <div className="flex items-center gap-3">
-        {username && (
-          <span className="text-sm text-slate-500">{username}</span>
-        )}
-        <Button variant="ghost" size="sm" onClick={handleLogout} aria-label="退出登录">
+        {username && <span className="text-sm text-slate-500">{username}</span>}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleLogout}
+          aria-label="退出登录"
+        >
           退出
         </Button>
       </div>

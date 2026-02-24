@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api/knowledge", () => ({
   triggerReprocess: vi.fn(),
-  cancelStructuring: vi.fn()
+  cancelStructuring: vi.fn(),
 }));
 
 import { triggerReprocess } from "@/lib/api/knowledge";
@@ -17,12 +17,14 @@ function createWrapper() {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
-      mutations: { retry: false }
-    }
+      mutations: { retry: false },
+    },
   });
 
-  return ({ children }: { children: ReactNode }) =>
+  const Wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client }, children);
+  Wrapper.displayName = "TestQueryWrapper";
+  return Wrapper;
 }
 
 function makeSseResponse(chunks: string[]): Response {
@@ -33,12 +35,12 @@ function makeSseResponse(chunks: string[]): Response {
         controller.enqueue(encoder.encode(chunk));
       }
       controller.close();
-    }
+    },
   });
 
   return new Response(stream, {
     status: 200,
-    headers: { "Content-Type": "text/event-stream" }
+    headers: { "Content-Type": "text/event-stream" },
   });
 }
 
@@ -54,7 +56,9 @@ describe("useKnowledgeStructuring", () => {
   it("shows trigger error when triggerReprocess fails", async () => {
     mockedTriggerReprocess.mockRejectedValueOnce(new Error("boom"));
 
-    const { result } = renderHook(() => useKnowledgeStructuring("mat-1"), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useKnowledgeStructuring("mat-1"), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
       await result.current.trigger();
@@ -66,15 +70,20 @@ describe("useKnowledgeStructuring", () => {
   });
 
   it("consumes SSE status and error events to finish with error state", async () => {
-    mockedTriggerReprocess.mockResolvedValueOnce({ material_id: "mat-1", trace_id: "trace-1" });
+    mockedTriggerReprocess.mockResolvedValueOnce({
+      material_id: "mat-1",
+      trace_id: "trace-1",
+    });
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       makeSseResponse([
         'event: status\ndata: {"label":"提取事件"}\n\n',
-        'event: error\ndata: {"message":"解析失败"}\n\n'
-      ])
+        'event: error\ndata: {"message":"解析失败"}\n\n',
+      ]),
     );
 
-    const { result } = renderHook(() => useKnowledgeStructuring("mat-1"), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useKnowledgeStructuring("mat-1"), {
+      wrapper: createWrapper(),
+    });
 
     await act(async () => {
       await result.current.trigger();
