@@ -1,6 +1,10 @@
 import asyncio
 
-from src.application.interview.dialogue_storage.pending_event import PendingEventManager
+from src.application.interview.dialogue_storage.pending_event import (
+    PendingEventManager,
+    UPDATE_EXPLORED,
+    UPDATE_PRIORITY,
+)
 from src.domain.schemas.interview import PendingEvent
 
 
@@ -33,5 +37,32 @@ def test_pending_event_manager_reorder_uses_domain_order_rule():
         await manager.reorder()
         ordered = await manager.get_all()
         assert [e.id for e in ordered] == [id3, id2, id1]
+
+    asyncio.run(_run())
+
+
+def test_pending_event_manager_update_batch_respects_field_mask():
+    async def _run():
+        manager = PendingEventManager()
+        eid = await manager.add("需要补充", explored_content="", is_priority=False)
+
+        updated = await manager.update_batch(
+            [{"id": eid, "is_priority": True, "explored_content": "new details"}],
+            UPDATE_PRIORITY,
+        )
+        assert updated == 1
+
+        event = await manager.get(eid)
+        assert event is not None
+        assert event.is_priority is True
+        assert event.explored_content == ""
+
+        await manager.update_batch(
+            [{"id": eid, "explored_content": "new details"}],
+            UPDATE_EXPLORED,
+        )
+        event = await manager.get(eid)
+        assert event is not None
+        assert event.explored_content == "new details"
 
     asyncio.run(_run())

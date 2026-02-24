@@ -23,8 +23,10 @@ def test_sqlite_client_compat_methods_delegate_to_stores(tmp_path: Path):
     assert "内向" in profile.personality
 
     assert client.insert_or_update_alias("张三", ["阿三"], "person") == 1
+    assert client.insert_or_update_alias("张三", ["老张", "阿三"], "person") == 1
     aliases = client.get_all_aliases()
     assert aliases[0]["formal_name"] == "张三"
+    assert sorted(aliases[0]["alias_list"]) == ["老张", "阿三"]
 
     client.insert_material(material_id="m1", filename="a.txt", material_type="document")
     row = client.get_material_by_id("m1")
