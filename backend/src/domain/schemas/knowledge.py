@@ -1,40 +1,36 @@
 """
 知识图谱相关的领域模型
+
+LifeEvent 和 CharacterProfile 是数据链路的 single source of truth，
+字段与 SQLite 表结构 + LLM 提取器输出完全对齐。
 """
-from typing import Optional, List, Dict, Any
+
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
 
 
 class LifeEvent(BaseModel):
-    """人生事件"""
-    event_type: str = Field(description="事件类型")
-    description: str = Field(description="事件描述")
-    start_time: Optional[str] = Field(default=None, description="开始时间")
-    end_time: Optional[str] = Field(default=None, description="结束时间")
-    location: Optional[str] = Field(default=None, description="地点")
-    participants: List[str] = Field(default_factory=list, description="参与者")
-    impact: Optional[str] = Field(default=None, description="影响")
-    confidence: float = Field(default=1.0, description="置信度")
+    """人生事件 — 对齐 life_events 表 + LLM 提取输出。"""
+
+    id: int | None = None
+    year: str = Field(description="精准年份，跨年段用 9999")
+    time_detail: str | None = Field(default=None, description="季节/月日/推断信息")
+    event_summary: str = Field(description="简要事件描述")
+    event_details: str | None = Field(default=None, description="详细描述")
+    is_merged: bool = Field(default=False, description="是否经过合并精炼")
+    life_stage: str = Field(default="未知", description="人生阶段")
+    event_category: list[str] = Field(default_factory=list, description="事件分类标签")
+    confidence: str = Field(default="high", description="置信度 high/medium/low")
+    source_material_id: str | None = Field(default=None, description="来源素材 ID")
+    created_at: str | None = Field(default=None, description="数据库时间戳")
 
 
 class CharacterProfile(BaseModel):
-    """人物画像"""
-    name: str = Field(description="人物姓名")
-    aliases: List[str] = Field(default_factory=list, description="别名")
-    description: Optional[str] = Field(default=None, description="描述")
-    relationships: Dict[str, str] = Field(default_factory=dict, description="关系")
-    attributes: Dict[str, Any] = Field(default_factory=dict, description="属性")
+    """人物画像 — 对齐 character_profiles 表。"""
 
-
-class KnowledgeExtractionRequest(BaseModel):
-    """知识提取请求"""
-    username: str = Field(description="用户名")
-    text: str = Field(description="待提取文本")
-
-
-class KnowledgeExtractionResponse(BaseModel):
-    """知识提取响应"""
-    success: bool = Field(description="是否成功")
-    events_count: int = Field(default=0, description="提取的事件数")
-    characters_count: int = Field(default=0, description="提取的人物数")
-    message: Optional[str] = Field(default=None, description="提示信息")
+    id: int | None = None
+    personality: str = Field(default="", description="性格特征")
+    worldview: str = Field(default="", description="世界观")
+    source_material_id: str | None = Field(default=None, description="来源素材 ID")
+    created_at: str | None = Field(default=None, description="数据库时间戳")
