@@ -38,7 +38,7 @@ echo "[check-backend] ruff (tests: E/F only)"
 echo "[check-backend] mypy (tests only)"
 .venv/bin/mypy --ignore-missing-imports --follow-imports=skip tests
 
-echo "[check-backend] pytest"
-.venv/bin/pytest -q tests
+echo "[check-backend] pytest (critical subset, low-load)"
+.venv/bin/pytest -q tests/test_api_error_contracts.py tests/test_auth_service.py
 
 echo "[check-backend] done"

@@ -3,19 +3,20 @@ name: frontend-checks
 on:
   push:
     paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend-checks.yml'
+      - "frontend/**"
+      - "scripts/check_frontend.sh"
+      - "scripts/check_quick.sh"
+      - ".github/workflows/frontend-checks.yml"
   pull_request:
     paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend-checks.yml'
+      - "frontend/**"
+      - "scripts/check_frontend.sh"
+      - "scripts/check_quick.sh"
+      - ".github/workflows/frontend-checks.yml"
 
 jobs:
   frontend:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -26,8 +27,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -s lint
-      - run: pnpm -s typecheck
-      - run: pnpm -s test:unit
-      - run: pnpm -s check:contract
+      - run: ./scripts/check_frontend.sh
+      - name: Contract parity (full check)
+        working-directory: frontend
+        run: pnpm -s check:contract

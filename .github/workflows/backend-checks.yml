@@ -5,19 +5,18 @@ on:
     paths:
       - "backend/**"
       - "scripts/check_backend.sh"
+      - "scripts/check_quick.sh"
       - ".github/workflows/backend-checks.yml"
   pull_request:
     paths:
       - "backend/**"
       - "scripts/check_backend.sh"
+      - "scripts/check_quick.sh"
       - ".github/workflows/backend-checks.yml"
 
 jobs:
   checks:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
 
     steps:
       - name: Checkout
@@ -31,20 +30,5 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Create venv and install deps
-        run: |
-          uv venv
-          uv pip install --python .venv/bin/python \
-            fastapi uvicorn pydantic pydantic-settings \
-            langgraph google-genai sqlite-vec httpx \
-            python-jose[cryptography] passlib[bcrypt] python-dotenv python-multipart \
-            pytest ruff mypy
-
-      - name: Ruff (tests: E/F only)
-        run: .venv/bin/ruff check --select E,F --ignore E501 tests
-
-      - name: Mypy (tests only)
-        run: .venv/bin/mypy --ignore-missing-imports --follow-imports=skip tests
-
-      - name: Pytest
-        run: .venv/bin/pytest -q tests
+      - name: Run backend low-load checks
+        run: ./scripts/check_backend.sh

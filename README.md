@@ -83,25 +83,36 @@ npm run dev
 - **打开浏览器访问 `http://localhost:3000` 即可访问。**
 - 可以新建一个用户命名为 `测试用户`，然后从 [网盘](https://disk.pku.edu.cn/link/AA08A32540A67143FFA3DE91C17DEB9456) 下载测试数据，上传到服务进行结构化
 
-## 开发检查
+## 开发检查（低负载，推荐日常使用）
 
 在仓库根目录执行：
 
 ```bash
-# 低负载日常检查（推荐，前端+后端关键回归）
-./scripts/check_quick.sh
-
-# 后端完整检查
+# 后端（低负载）
 ./scripts/check_backend.sh
+
+# 前端（低负载）
+./scripts/check_frontend.sh
+
+# 一键执行前后端低负载检查
+./scripts/check_quick.sh
 ```
 
-其中后端完整检查会执行：
+低负载检查默认只覆盖高频问题：
 
-- `ruff check --select E,F --ignore E501 tests`
-- `mypy --ignore-missing-imports --follow-imports=skip tests`
-- `pytest tests`
+- 后端：`ruff` + `mypy` + 关键契约/鉴权测试（不跑全量测试）
+- 前端：`lint` + `typecheck` + 单元测试
 
-> 说明：脚本会自动使用 `backend/.venv`，不需要手动设置 `PYTHONPATH`。
+> 说明：`check_backend.sh` 会自动使用 `backend/.venv`。
+
+### 全量检查（提交前/合并前）
+
+如需完整回归，请手动执行全量测试：
+
+```bash
+cd backend && PYTHONPATH=. ./.venv/bin/pytest -q tests
+cd frontend && pnpm -s check:contract
+```
 
 # 深入了解
 
