@@ -13,6 +13,7 @@ import { deleteMaterial } from "@/lib/api/knowledge-browser";
 import { UploadMaterialModal } from "@/components/knowledge/upload-material-modal";
 import type { MaterialItem } from "@/lib/api/knowledge-browser";
 import { softSpring } from "@/lib/motion/spring";
+import { knowledgeQueryKeys } from "@/lib/query-keys";
 
 const STAGE_ORDER = ["读取文件", "提取事件", "向量化", "完成"] as const;
 
@@ -56,8 +57,8 @@ function FileCard({ item, index }: { item: MaterialItem; index: number }) {
     setDeleting(true);
     try {
       await deleteMaterial(item.id);
-      void queryClient.invalidateQueries({ queryKey: ["materials"] });
-      void queryClient.invalidateQueries({ queryKey: ["knowledge", "events"] });
+      void queryClient.invalidateQueries({ queryKey: knowledgeQueryKeys.materials });
+      void queryClient.invalidateQueries({ queryKey: knowledgeQueryKeys.events });
     } catch {
       // silently fail — user can retry
     } finally {

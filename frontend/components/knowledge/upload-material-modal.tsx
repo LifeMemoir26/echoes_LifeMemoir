@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Input } from "@/components/ui/input";
 import { uploadMaterial, type MaterialUploadItem } from "@/lib/api/knowledge-browser";
+import { knowledgeQueryKeys } from "@/lib/query-keys";
 
 interface Props {
   open: boolean;
@@ -53,9 +54,9 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
     try {
       const data = await uploadMaterial(username, selectedFiles, materialContext, displayName.trim(), skipProcessing, materialType);
       setResults(data.items);
-      void queryClient.invalidateQueries({ queryKey: ["materials"] });
-      void queryClient.invalidateQueries({ queryKey: ["knowledge", "events"] });
-      void queryClient.invalidateQueries({ queryKey: ["records"] });
+      void queryClient.invalidateQueries({ queryKey: knowledgeQueryKeys.materials });
+      void queryClient.invalidateQueries({ queryKey: knowledgeQueryKeys.events });
+      void queryClient.invalidateQueries({ queryKey: knowledgeQueryKeys.profiles });
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "上传失败");
     } finally {

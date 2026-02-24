@@ -64,7 +64,7 @@ describe("api/interview-sse connect errors", () => {
         code: "SSE_CONNECT_FAILED",
         retryable: true
       }
-    } satisfies Partial<ApiRequestError>);
+    });
   });
 
   it("parses initial context event with session_id", async () => {
