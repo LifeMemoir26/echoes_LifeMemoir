@@ -104,9 +104,6 @@ class InterviewSession:
     def get_interview_suggestions(self):
         return self.runtime.storage.get_interview_suggestions()
 
-    async def get_session_summaries(self) -> list[str]:
-        return await self.runtime.storage.get_all_summaries_formatted()
-
     async def get_pending_events_summary(self) -> PendingEventsSummary:
         total = await self.runtime.storage.pending_events_count()
         priority = await self.runtime.storage.get_priority_pending_events()

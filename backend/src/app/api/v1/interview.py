@@ -3,25 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
 
-from src.application.interview.session import reset_interview_session
 from src.application.interview.session_app_service import InterviewRouteError, InterviewSessionAppService
 
 from .deps import get_current_username
 from .errors import build_error, error_response
 from .models import ApiResponse, SessionActionData, SessionCreateData, SessionCreateRequest, SessionMessageRequest
-from .session_registry import SessionEvent, registry
+from .session_registry import registry
 from .sse_utils import encode_sse, iso_now
-
-logger = logging.getLogger(__name__)
-
 
 router = APIRouter()
 _service = InterviewSessionAppService(registry)
@@ -194,32 +188,11 @@ async def close_session(
     session_id: str,
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[SessionActionData]:
-    record = await registry.close(session_id)
-    if record is None:
-        raise error_response(
-            status_code=404,
-            error_code="SESSION_NOT_FOUND",
-            error_message="session does not exist or has expired",
-            trace_id=f"session-{session_id}",
-        )
-    if current_username != record.username:
-        raise error_response(
-            status_code=403,
-            error_code="FORBIDDEN_USERNAME",
-            error_message="token username does not match session owner",
-            trace_id=f"session-{session_id}",
-        )
-
     try:
-        await reset_interview_session(record.interview_session)
-    except Exception:
-        logger.warning("Failed to reset interview session %s", session_id, exc_info=True)
+        record = await _service.close_session(session_id, current_username)
+    except InterviewRouteError as err:
+        _raise_route_error(err)
 
-    await registry.publish(
-        session_id,
-        "completed",
-        {"trace_id": record.thread_id, "status": "session_closed", "at": iso_now()},
-    )
     return ApiResponse(
         status="success",
         data=SessionActionData(
@@ -239,94 +212,20 @@ async def stream_events(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
     try:
-        record = await _service.get_owned_active_record(session_id, current_username)
+        record, resume_from, queue = await _service.prepare_stream_events(session_id, current_username, last_event_id)
     except InterviewRouteError as err:
         _raise_route_error(err)
 
-    resume_from: int | None = None
-    if last_event_id and last_event_id.isdigit():
-        resume_from = int(last_event_id)
-
-    queue = await registry.subscribe(session_id, resume_from)
-    if queue is None:
-        raise error_response(
-            status_code=404,
-            error_code="SESSION_NOT_FOUND",
-            error_message="session does not exist or has expired",
-            trace_id=f"session-{session_id}",
-        )
-
     async def event_stream() -> Any:
-        connected_payload = {
-            "trace_id": record.thread_id,
-            "session_id": session_id,
-            "connected_at": iso_now(),
-            "resumed": resume_from is not None,
-        }
-        yield encode_sse("connected", connected_payload, event_id=0)
-
-        try:
-            isession = record.interview_session
-            supplements = isession.get_event_supplements()
-            suggestions = isession.get_interview_suggestions()
-            pending = await isession.get_pending_events_summary()
-            snapshot: dict[str, Any] = {
-                "trace_id": record.thread_id,
-                "event_supplements": [s.model_dump() for s in (supplements or [])],
-                "positive_triggers": suggestions.positive_triggers if suggestions else [],
-                "sensitive_topics": suggestions.sensitive_topics if suggestions else [],
-                "pending_events": pending,
-                "at": iso_now(),
-            }
-            yield encode_sse("context", snapshot, event_id=0)
-        except Exception:
-            logger.debug("SSE snapshot failed for session %s (best-effort)", session_id, exc_info=True)
-
-        try:
-            while True:
-                try:
-                    evt: SessionEvent = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SECONDS)
-                    yield encode_sse(
-                        evt.event,
-                        {
-                            "session_id": session_id,
-                            **evt.payload,
-                        },
-                        event_id=evt.event_id,
-                    )
-                    if evt.event == "completed" and isinstance(evt.payload, dict):
-                        status = str(evt.payload.get("status", ""))
-                        if status in {"session_closed", "idle_timeout"}:
-                            break
-                except TimeoutError:
-                    latest = await registry.get(session_id)
-                    if latest is None:
-                        break
-                    idle_for = (datetime.now(timezone.utc) - latest.last_activity_at).total_seconds()
-                    if idle_for >= IDLE_TIMEOUT_SECONDS:
-                        await registry.publish(
-                            session_id,
-                            "completed",
-                            {
-                                "trace_id": latest.thread_id,
-                                "status": "idle_timeout",
-                                "idle_seconds": int(idle_for),
-                                "at": iso_now(),
-                            },
-                        )
-                        continue
-
-                    yield encode_sse(
-                        "heartbeat",
-                        {
-                            "session_id": session_id,
-                            "trace_id": latest.thread_id,
-                            "at": iso_now(),
-                        },
-                        event_id=-1,
-                    )
-        finally:
-            await registry.unsubscribe(session_id, queue)
+        async for evt in _service.iter_stream_events(
+            record,
+            session_id,
+            queue,
+            resume_from,
+            heartbeat_seconds=HEARTBEAT_SECONDS,
+            idle_timeout_seconds=IDLE_TIMEOUT_SECONDS,
+        ):
+            yield encode_sse(evt["event"], evt["payload"], event_id=evt.get("event_id"))
 
     return StreamingResponse(
         event_stream(),

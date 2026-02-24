@@ -116,3 +116,20 @@ uvicorn src.app.main:app --reload --port 8000
 ```
 
 环境变量说明见 [.env.example](.env.example)。
+
+## 开发检查
+
+从仓库根目录执行统一检查命令：
+
+```bash
+./scripts/check_backend.sh
+```
+
+如果只想在 backend 目录内运行测试：
+
+```bash
+cd backend
+.venv/bin/pytest -q tests
+```
+
+> 已通过 `tests/conftest.py` 统一导入路径，无需手动设置 `PYTHONPATH`。

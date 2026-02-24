@@ -11,9 +11,6 @@ from datetime import datetime
 from ....infra.utils.text_splitter import TextSplitter, SplitterMode
 from .extractor.life_event_extractor import LifeEventExtractor
 from .extractor.character_profile_extractor import CharacterProfileExtractor
-from ....infra.llm.client.qiniu_client import AsyncQiniuAIClient
-from ...contracts.llm import LLMGatewayProtocol
-from ....core.config import LLMConfig
 from ....infra.database.sqlite_client import SQLiteClient
 from ....infra.database import EventStore, CharacterStore
 from ....domain.schemas.knowledge import LifeEvent, CharacterProfile
@@ -262,44 +259,3 @@ class ExtractionApplication:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-
-
-async def process_text_file(
-    file_path: str,
-    username: str,
-    narrator_name: str = "叙述者",
-    data_base_dir: Optional[Path] = None,
-    concurrency_level: int = 5,
-    verbose: bool = True
-) -> Dict[str, Any]:
-    """
-    处理文本文件的便捷函数
-    
-    Args:
-        file_path: 文本文件路径
-        username: 用户名
-        narrator_name: 叙述者名称
-        data_base_dir: 数据存储目录
-        concurrency_level: 并发级别
-        verbose: 是否打印详细信息
-        
-    Returns:
-        处理结果统计
-    """
-    # 读取文件
-    with open(file_path, 'r', encoding='utf-8') as f:
-        text = f.read()
-    
-    logger.info(f"读取文件: {file_path}, 长度: {len(text)}字符")
-    
-    # 创建应用
-    with ExtractionApplication(
-        username=username,
-        data_base_dir=data_base_dir,
-        concurrency_level=concurrency_level,
-        verbose=verbose
-    ) as service:
-        # 处理文本
-        stats = await service.process_text(text, narrator_name)
-        stats['source_file'] = file_path
-        return stats

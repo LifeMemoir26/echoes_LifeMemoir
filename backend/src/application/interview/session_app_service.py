@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -12,8 +13,11 @@ from src.application.interview.session import (
     _bootstrap_supplements_bg,
     add_dialogue_streaming,
     create_interview_session,
+    reset_interview_session,
 )
 from src.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -47,6 +51,138 @@ class InterviewSessionAppService:
                 trace_id=trace_id,
             )
         return record
+
+    async def close_session(self, session_id: str, current_username: str) -> Any:
+        record = await self.registry.close(session_id)
+        trace_id = f"session-{session_id}"
+        if record is None:
+            raise InterviewRouteError(
+                status_code=404,
+                error_code="SESSION_NOT_FOUND",
+                error_message="session does not exist or has expired",
+                trace_id=trace_id,
+            )
+        if current_username != record.username:
+            raise InterviewRouteError(
+                status_code=403,
+                error_code="FORBIDDEN_USERNAME",
+                error_message="token username does not match session owner",
+                trace_id=trace_id,
+            )
+
+        try:
+            await reset_interview_session(record.interview_session)
+        except Exception:
+            logger.warning("Failed to reset interview session %s", session_id, exc_info=True)
+
+        await self.registry.publish(
+            session_id,
+            "completed",
+            {"trace_id": record.thread_id, "status": "session_closed", "at": datetime.now(timezone.utc).isoformat()},
+        )
+        return record
+
+    async def prepare_stream_events(
+        self,
+        session_id: str,
+        current_username: str,
+        last_event_id: str | None,
+    ) -> tuple[Any, int | None, asyncio.Queue[Any]]:
+        record = await self.get_owned_active_record(session_id, current_username)
+        resume_from: int | None = None
+        if last_event_id and last_event_id.isdigit():
+            resume_from = int(last_event_id)
+
+        queue = await self.registry.subscribe(session_id, resume_from)
+        if queue is None:
+            raise InterviewRouteError(
+                status_code=404,
+                error_code="SESSION_NOT_FOUND",
+                error_message="session does not exist or has expired",
+                trace_id=f"session-{session_id}",
+            )
+
+        return record, resume_from, queue
+
+    async def iter_stream_events(
+        self,
+        record: Any,
+        session_id: str,
+        queue: asyncio.Queue[Any],
+        resume_from: int | None,
+        heartbeat_seconds: int,
+        idle_timeout_seconds: int,
+    ):
+        try:
+            yield {
+                "event": "connected",
+                "event_id": 0,
+                "payload": {
+                    "trace_id": record.thread_id,
+                    "session_id": session_id,
+                    "connected_at": datetime.now(timezone.utc).isoformat(),
+                    "resumed": resume_from is not None,
+                },
+            }
+
+            try:
+                isession = record.interview_session
+                supplements = isession.get_event_supplements()
+                suggestions = isession.get_interview_suggestions()
+                pending = await isession.get_pending_events_summary()
+                yield {
+                    "event": "context",
+                    "event_id": 0,
+                    "payload": {
+                        "trace_id": record.thread_id,
+                        "event_supplements": [s.model_dump() for s in (supplements or [])],
+                        "positive_triggers": suggestions.positive_triggers if suggestions else [],
+                        "sensitive_topics": suggestions.sensitive_topics if suggestions else [],
+                        "pending_events": pending,
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
+            except Exception:
+                logger.debug("SSE snapshot failed for session %s (best-effort)", session_id, exc_info=True)
+
+            while True:
+                try:
+                    evt = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                    payload = {"session_id": session_id, **evt.payload}
+                    yield {"event": evt.event, "event_id": evt.event_id, "payload": payload}
+                    if evt.event == "completed" and isinstance(evt.payload, dict):
+                        status = str(evt.payload.get("status", ""))
+                        if status in {"session_closed", "idle_timeout"}:
+                            break
+                except TimeoutError:
+                    latest = await self.registry.get(session_id)
+                    if latest is None:
+                        break
+                    idle_for = (datetime.now(timezone.utc) - latest.last_activity_at).total_seconds()
+                    if idle_for >= idle_timeout_seconds:
+                        await self.registry.publish(
+                            session_id,
+                            "completed",
+                            {
+                                "trace_id": latest.thread_id,
+                                "status": "idle_timeout",
+                                "idle_seconds": int(idle_for),
+                                "at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                        continue
+
+                    yield {
+                        "event": "heartbeat",
+                        "event_id": -1,
+                        "payload": {
+                            "session_id": session_id,
+                            "trace_id": latest.thread_id,
+                            "at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    }
+        finally:
+            await self.registry.unsubscribe(session_id, queue)
 
     async def toggle_pending_event_priority(self, session_id: str, event_id: str, current_username: str) -> tuple[Any, bool]:
         record = await self.get_owned_active_record(session_id, current_username)

@@ -1,10 +1,8 @@
 """
 人物特征提取器 - 提取性格、世界观、别名关联
 """
-import json
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime
 
 from ....contracts.llm import LLMGatewayProtocol
 
@@ -182,46 +180,6 @@ class CharacterProfileExtractor:
         except Exception as e:
             logger.error(f"人物特征提取失败: {e}", exc_info=True)
             return self._get_empty_profile()
-    
-    def _normalize_profile(self, profile: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        规范化人物特征格式
-        
-        确保包含所有必需字段，且类型正确
-        """
-        normalized = {
-            'personality': '',
-            'worldview': '',
-            'aliases': []
-        }
-        
-        # 处理性格特点（严格要求字符串）
-        if 'personality' in profile:
-            if isinstance(profile['personality'], str):
-                normalized['personality'] = profile['personality'].strip()
-        
-        # 处理世界观（严格要求字符串）
-        if 'worldview' in profile:
-            if isinstance(profile['worldview'], str):
-                normalized['worldview'] = profile['worldview'].strip()
-        
-        # 处理别名关联
-        if 'aliases' in profile and isinstance(profile['aliases'], list):
-            for alias_item in profile['aliases']:
-                if isinstance(alias_item, dict):
-                    # 验证必需字段
-                    if all(k in alias_item for k in ['type', 'formal_name', 'alias_list']):
-                        normalized_alias = {
-                            'type': str(alias_item['type']),
-                            'formal_name': str(alias_item['formal_name']),
-                            'alias_list': [
-                                str(a) for a in alias_item['alias_list']
-                                if a and isinstance(a, str)
-                            ]
-                        }
-                        normalized['aliases'].append(normalized_alias)
-        
-        return normalized
     
     def _get_empty_profile(self) -> Dict[str, Any]:
         """获取空的人物特征模板"""
