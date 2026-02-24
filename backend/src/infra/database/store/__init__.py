@@ -6,6 +6,7 @@ from .vector_store import VectorStore
 from .alias_store import AliasStore, create_alias_store
 from .event_store import EventStore
 from .character_store import CharacterStore
+from .material_store import MaterialMetaStore
 
 __all__ = [
     'ChunkStore',
@@ -13,5 +14,6 @@ __all__ = [
     'AliasStore',
     'EventStore',
     'CharacterStore',
+    'MaterialMetaStore',
     'create_alias_store',
 ]

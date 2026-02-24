@@ -1,7 +1,5 @@
-"""
-SQLite客户端 - 负责数据库连接和基础操作
-"""
-import json
+"""SQLite客户端 - 负责数据库连接/事务/生命周期管理（业务操作下沉到 store/）"""
+
 import logging
 import sqlite3
 from pathlib import Path
@@ -9,65 +7,47 @@ from typing import Any, Dict, Optional, List
 
 from ...core.paths import get_data_root
 from ...domain.schemas.knowledge import LifeEvent, CharacterProfile
+from .store import EventStore, CharacterStore
+from .store.alias_store import AliasStore
+from .store.material_store import MaterialMetaStore
 
 logger = logging.getLogger(__name__)
 
 
 class SQLiteClient:
-    """
-    SQLite客户端
-    
-    数据存储位置：项目根目录/data/{username}/database.db
-    表结构：
-    - life_events: 人生重要事件
-    - character_profiles: 人物性格、世界观、别名等
-    - aliases: 别名映射表
-    """
-    
+    """SQLite 连接管理器（兼容旧接口）。"""
+
     def __init__(self, username: str, data_base_dir: Optional[Path] = None):
-        """
-        初始化SQLite客户端
-        
-        Args:
-            username: 用户名，用于创建独立的数据库
-            data_base_dir: 数据存储基础目录，默认为项目根目录/data
-        """
         self.username = username
-        
-        # 确定数据存储路径
         if data_base_dir:
             self.data_dir = Path(data_base_dir) / username
         else:
-            # 默认：项目根目录/data/{username}
             self.data_dir = get_data_root() / username
-        
-        # 创建数据目录
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        
-        # SQLite数据库文件路径
-        self.db_path = self.data_dir / "database.db"
-        
-        try:
-            # 连接到SQLite数据库
-            self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-            self.conn.row_factory = sqlite3.Row  # 使结果可以像字典一样访问
 
-            # 创建表
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.data_dir / "database.db"
+
+        try:
+            self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
             self._create_tables()
-            # 幂等迁移（为已有数据库补充新字段）
             self._migrate_schema()
+
+            # Stores（业务查询/写入逻辑）
+            self.event_store = EventStore(self)
+            self.character_store = CharacterStore(self)
+            self.alias_store = AliasStore(sqlite_client=self)
+            self.material_store = MaterialMetaStore(self)
 
             logger.info(f"SQLite客户端已连接: 数据库={self.db_path}")
         except Exception as e:
             logger.error(f"SQLite连接失败: {e}")
             raise
-    
+
     def _create_tables(self):
-        """创建数据表"""
         cursor = self.conn.cursor()
-        
-        # 创建事件表
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS life_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 year TEXT NOT NULL,
@@ -77,20 +57,20 @@ class SQLiteClient:
                 is_merged BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        
-        # 创建人物特征表（别名已移至aliases表）
-        cursor.execute("""
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS character_profiles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 personality TEXT,
                 worldview TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        
-        # 创建别名表
-        cursor.execute("""
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS aliases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 main_name TEXT NOT NULL,
@@ -98,15 +78,14 @@ class SQLiteClient:
                 entity_type TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        
-        # 创建索引
+            """
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_year ON life_events(year)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_summary ON life_events(event_summary)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_aliases_main_name ON aliases(main_name)")
 
-        # materials 表：追踪所有上传的原始材料
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS materials (
                 id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
@@ -121,13 +100,12 @@ class SQLiteClient:
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 processed_at TIMESTAMP
             )
-        """)
+            """
+        )
 
         self.conn.commit()
-        logger.debug("SQLite表和索引创建完成")
 
     def _migrate_schema(self):
-        """幂等地为已有数据库补充新字段（ADD COLUMN IF NOT EXISTS 语义）"""
         cursor = self.conn.cursor()
         migrations = [
             "ALTER TABLE life_events ADD COLUMN life_stage TEXT DEFAULT '未知'",
@@ -141,298 +119,49 @@ class SQLiteClient:
             try:
                 cursor.execute(stmt)
             except sqlite3.OperationalError as e:
-                if "duplicate column" in str(e).lower():
-                    pass  # 已存在，忽略
-                else:
+                if "duplicate column" not in str(e).lower():
                     raise
         self.conn.commit()
-        logger.debug("Schema 迁移完成")
-    
+
+    # ===== 兼容旧接口：全部转发到 store =====
     def insert_events(self, events: list[LifeEvent]) -> int:
-        """
-        批量插入事件
-
-        Args:
-            events: LifeEvent 模型列表
-
-        Returns:
-            插入的数量
-        """
-        if not events:
-            return 0
-
-        cursor = self.conn.cursor()
-        count = 0
-
-        for event in events:
-            # event_category: list[str] → JSON string for SQLite
-            category_json = json.dumps(event.event_category, ensure_ascii=False)
-            cursor.execute("""
-                INSERT OR REPLACE INTO life_events
-                (year, time_detail, event_summary, event_details, is_merged,
-                 life_stage, event_category, confidence, source_material_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                event.year,
-                event.time_detail,
-                event.event_summary,
-                event.event_details or '',
-                event.is_merged,
-                event.life_stage,
-                category_json,
-                event.confidence,
-                event.source_material_id,
-            ))
-            count += 1
-
-        self.conn.commit()
-        logger.info(f"插入 {count} 条事件记录")
-        return count
-    
-    def insert_character_profile(self, profile: CharacterProfile) -> str:
-        """
-        插入人物特征档案
-
-        Args:
-            profile: CharacterProfile 模型
-
-        Returns:
-            插入的文档ID
-        """
-        cursor = self.conn.cursor()
-
-        cursor.execute("""
-            INSERT OR REPLACE INTO character_profiles
-            (personality, worldview, source_material_id)
-            VALUES (?, ?, ?)
-        """, (
-            profile.personality,
-            profile.worldview,
-            profile.source_material_id,
-        ))
-
-        self.conn.commit()
-        profile_id = str(cursor.lastrowid)
-        logger.info(f"插入人物特征档案, ID={profile_id}")
-        return profile_id
-    
-    def _row_to_life_event(self, row: sqlite3.Row) -> LifeEvent:
-        """Convert a sqlite3.Row from life_events table to LifeEvent model."""
-        d = dict(row)
-        # event_category stored as JSON string in SQLite
-        raw_cat = d.get("event_category", "[]")
-        if isinstance(raw_cat, str):
-            try:
-                d["event_category"] = json.loads(raw_cat)
-            except (json.JSONDecodeError, TypeError):
-                d["event_category"] = []
-        # is_merged stored as 0/1 in SQLite
-        d["is_merged"] = bool(d.get("is_merged", False))
-        # created_at → str
-        if d.get("created_at") is not None:
-            d["created_at"] = str(d["created_at"])
-        return LifeEvent.model_validate(d)
+        return self.event_store.insert_events(events)
 
     def get_all_events(self, sort_by_year: bool = True) -> list[LifeEvent]:
-        """
-        获取所有事件
+        return self.event_store.get_all_events(sort_by_year=sort_by_year)
 
-        Args:
-            sort_by_year: 是否按年份排序
+    def clear_events(self):
+        self.event_store.clear_events()
 
-        Returns:
-            LifeEvent 列表
-        """
-        cursor = self.conn.cursor()
+    def insert_character_profile(self, profile: CharacterProfile) -> str:
+        return self.character_store.insert_character_profile(profile)
 
-        if sort_by_year:
-            cursor.execute("SELECT * FROM life_events ORDER BY year ASC")
-        else:
-            cursor.execute("SELECT * FROM life_events")
-
-        return [self._row_to_life_event(row) for row in cursor.fetchall()]
-    
     def get_character_profiles(self) -> list[CharacterProfile]:
-        """
-        获取所有人物特征档案
-
-        Returns:
-            CharacterProfile 列表
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM character_profiles")
-
-        profiles = []
-        for row in cursor.fetchall():
-            d = dict(row)
-            if d.get("created_at") is not None:
-                d["created_at"] = str(d["created_at"])
-            profiles.append(CharacterProfile.model_validate(d))
-
-        return profiles
+        return self.character_store.get_character_profiles()
 
     def get_character_profile(self) -> CharacterProfile | None:
-        """
-        获取合并后的人物特征档案（聚合所有档案）
+        return self.character_store.get_character_profile()
 
-        Returns:
-            合并后的 CharacterProfile，如果没有数据则返回 None
-        """
-        profiles = self.get_character_profiles()
-
-        if not profiles:
-            return None
-
-        # 收集所有非空段落
-        personality_parts = []
-        worldview_parts = []
-
-        for profile in profiles:
-            if profile.personality and profile.personality.strip():
-                personality_parts.append(profile.personality.strip())
-            if profile.worldview and profile.worldview.strip():
-                worldview_parts.append(profile.worldview.strip())
-
-        # 拼接成完整段落（用双换行符分隔不同来源的段落）
-        return CharacterProfile(
-            personality='\n\n'.join(personality_parts) if personality_parts else '',
-            worldview='\n\n'.join(worldview_parts) if worldview_parts else '',
-        )
-    
     def get_character_profile_text(self) -> str:
-        """
-        获取格式化的人物侧写文本
+        return self.character_store.get_character_profile_text()
 
-        Returns:
-            格式化的人物侧写文本字符串
-        """
-        profile = self.get_character_profile()
-
-        if not profile:
-            return "暂无人物侧写信息"
-
-        parts = []
-
-        if profile.personality:
-            parts.append(f"**性格特征**：\n{profile.personality}")
-
-        if profile.worldview:
-            parts.append(f"**世界观/价值观**：\n{profile.worldview}")
-
-        if not parts:
-            return "暂无人物侧写信息"
-
-        return "\n\n".join(parts)
-    
-    def clear_events(self):
-        """清空所有事件数据"""
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM life_events")
-        self.conn.commit()
-        logger.info("已清空所有事件数据")
-    
     def clear_character_profile(self):
-        """清空所有人物特征数据"""
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM character_profiles")
-        self.conn.commit()
-        logger.info("已清空所有人物特征数据")
-    
+        self.character_store.clear_character_profile()
+
     def get_all_aliases(self) -> List[Dict[str, Any]]:
-        """
-        获取所有别名记录
-        
-        Returns:
-            别名列表
-        """
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT main_name, alias_names, entity_type FROM aliases")
-        
-        aliases = []
-        for row in cursor.fetchall():
-            aliases.append({
-                'formal_name': row[0],
-                'alias_list': row[1].split(',') if row[1] else [],
-                'type': row[2] or 'other'
-            })
-        
-        return aliases
-    
+        return self.alias_store.get_all_aliases()
+
     def clear_aliases(self):
-        """清空所有别名数据"""
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM aliases")
-        self.conn.commit()
-        logger.info("已清空所有别名数据")
-    
+        self.alias_store.clear_aliases()
+
     def insert_or_update_alias(self, main_name: str, alias_names: List[str], entity_type: str = '') -> int:
-        """
-        插入或更新别名记录
-        
-        Args:
-            main_name: 主名称
-            alias_names: 别名列表
-            entity_type: 实体类型（人名/地名/物品）
-            
-        Returns:
-            影响的行数
-        """
-        if not alias_names:
-            return 0
-        
-        cursor = self.conn.cursor()
-        
-        # 检查是否已存在
-        cursor.execute("""
-            SELECT id, alias_names FROM aliases WHERE main_name = ?
-        """, (main_name,))
-        
-        row = cursor.fetchone()
-        alias_names_str = ','.join(alias_names)
-        
-        if row:
-            # 已存在，合并别名
-            existing_aliases = set(row[1].split(',')) if row[1] else set()
-            existing_aliases.update(alias_names)
-            merged_aliases_str = ','.join(sorted(existing_aliases))
-            
-            cursor.execute("""
-                UPDATE aliases 
-                SET alias_names = ?
-                WHERE main_name = ?
-            """, (merged_aliases_str, main_name))
-            logger.debug(f"更新别名: {main_name} -> {merged_aliases_str}")
-        else:
-            # 不存在，插入新记录
-            cursor.execute("""
-                INSERT INTO aliases (main_name, alias_names, entity_type)
-                VALUES (?, ?, ?)
-            """, (main_name, alias_names_str, entity_type))
-            logger.debug(f"插入别名: {main_name} -> {alias_names_str}")
-        
-        self.conn.commit()
-        return 1
-    
-    def clear_all_data(self):
-        """清空所有数据（谨慎使用）"""
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM life_events")
-        cursor.execute("DELETE FROM character_profiles")
-        self.conn.commit()
-        logger.warning(f"已清空用户 {self.username} 的所有数据")
-    
+        return self.alias_store.insert_or_update_alias(main_name, alias_names, entity_type)
+
     def get_all_materials(self) -> List[Dict[str, Any]]:
-        """返回该用户所有 materials 记录，按 uploaded_at 降序"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM materials ORDER BY uploaded_at DESC")
-        return [dict(row) for row in cursor.fetchall()]
+        return self.material_store.get_all_materials()
 
     def get_material_by_id(self, material_id: str) -> Optional[Dict[str, Any]]:
-        """按 id 查找单条 material 记录，不存在返回 None"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM materials WHERE id = ?", (material_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        return self.material_store.get_material_by_id(material_id)
 
     def insert_material(
         self,
@@ -445,16 +174,16 @@ class SQLiteClient:
         display_name: str = "",
         initial_status: str = "processing",
     ) -> None:
-        """插入新的 material 记录"""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO materials (id, filename, display_name, material_type, material_context, file_path, file_size, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (material_id, filename, display_name, material_type, material_context, file_path, file_size, initial_status),
+        self.material_store.insert_material(
+            material_id=material_id,
+            filename=filename,
+            material_type=material_type,
+            material_context=material_context,
+            file_path=file_path,
+            file_size=file_size,
+            display_name=display_name,
+            initial_status=initial_status,
         )
-        self.conn.commit()
 
     def update_material_status(
         self,
@@ -463,38 +192,23 @@ class SQLiteClient:
         events_count: int = 0,
         chunks_count: int = 0,
     ) -> None:
-        """更新 material 处理状态及统计数据"""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            UPDATE materials
-            SET status = ?, events_count = ?, chunks_count = ?, processed_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (status, events_count, chunks_count, material_id),
-        )
-        self.conn.commit()
+        self.material_store.update_material_status(material_id, status, events_count, chunks_count)
 
     def delete_material(self, material_id: str) -> bool:
-        """删除 material 记录及其关联的事件和侧写，返回是否成功删除"""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT id FROM materials WHERE id = ?", (material_id,))
-        if not cursor.fetchone():
-            return False
-        cursor.execute("DELETE FROM life_events WHERE source_material_id = ?", (material_id,))
-        cursor.execute("DELETE FROM character_profiles WHERE source_material_id = ?", (material_id,))
-        cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
-        self.conn.commit()
-        return True
+        return self.material_store.delete_material(material_id)
+
+    def clear_all_data(self):
+        self.clear_events()
+        self.clear_character_profile()
+        logger.warning(f"已清空用户 {self.username} 的所有数据")
 
     def close(self):
-        """关闭数据库连接"""
         if hasattr(self, 'conn'):
             self.conn.close()
             logger.info("SQLite连接已关闭")
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
