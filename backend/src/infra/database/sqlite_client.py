@@ -1,11 +1,14 @@
 """
 SQLite客户端 - 负责数据库连接和基础操作
 """
+import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, Optional, List
+
 from ...core.paths import get_data_root
+from ...domain.schemas.knowledge import LifeEvent, CharacterProfile
 
 logger = logging.getLogger(__name__)
 
@@ -145,180 +148,180 @@ class SQLiteClient:
         self.conn.commit()
         logger.debug("Schema 迁移完成")
     
-    def insert_events(self, events: List[Dict[str, Any]]) -> int:
+    def insert_events(self, events: list[LifeEvent]) -> int:
         """
         批量插入事件
-        
+
         Args:
-            events: 事件列表
-            
+            events: LifeEvent 模型列表
+
         Returns:
             插入的数量
         """
         if not events:
             return 0
-        
+
         cursor = self.conn.cursor()
         count = 0
-        
+
         for event in events:
+            # event_category: list[str] → JSON string for SQLite
+            category_json = json.dumps(event.event_category, ensure_ascii=False)
             cursor.execute("""
                 INSERT OR REPLACE INTO life_events
                 (year, time_detail, event_summary, event_details, is_merged,
                  life_stage, event_category, confidence, source_material_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                event.get('year'),
-                event.get('time_detail'),
-                event.get('event_summary'),
-                event.get('event_details', ''),
-                event.get('is_merged', False),
-                event.get('life_stage', '未知'),
-                event.get('event_category', '[]'),
-                event.get('confidence', 'high'),
-                event.get('source_material_id'),
+                event.year,
+                event.time_detail,
+                event.event_summary,
+                event.event_details or '',
+                event.is_merged,
+                event.life_stage,
+                category_json,
+                event.confidence,
+                event.source_material_id,
             ))
             count += 1
-        
+
         self.conn.commit()
         logger.info(f"插入 {count} 条事件记录")
         return count
     
-    def insert_character_profile(self, profile: Dict[str, Any]) -> str:
+    def insert_character_profile(self, profile: CharacterProfile) -> str:
         """
         插入人物特征档案
-        
+
         Args:
-            profile: 人物特征字典
-            
+            profile: CharacterProfile 模型
+
         Returns:
             插入的文档ID
         """
         cursor = self.conn.cursor()
-        
-        # personality和worldview严格要求为str格式（描述性段落文字）
-        personality = profile.get('personality', '')
-        worldview = profile.get('worldview', '')
-        
+
         cursor.execute("""
-            INSERT OR REPLACE INTO character_profiles 
-            (personality, worldview)
-            VALUES (?, ?)
+            INSERT OR REPLACE INTO character_profiles
+            (personality, worldview, source_material_id)
+            VALUES (?, ?, ?)
         """, (
-            personality,
-            worldview
+            profile.personality,
+            profile.worldview,
+            profile.source_material_id,
         ))
-        
+
         self.conn.commit()
         profile_id = str(cursor.lastrowid)
         logger.info(f"插入人物特征档案, ID={profile_id}")
         return profile_id
     
-    def get_all_events(self, sort_by_year: bool = True) -> List[Dict[str, Any]]:
+    def _row_to_life_event(self, row: sqlite3.Row) -> LifeEvent:
+        """Convert a sqlite3.Row from life_events table to LifeEvent model."""
+        d = dict(row)
+        # event_category stored as JSON string in SQLite
+        raw_cat = d.get("event_category", "[]")
+        if isinstance(raw_cat, str):
+            try:
+                d["event_category"] = json.loads(raw_cat)
+            except (json.JSONDecodeError, TypeError):
+                d["event_category"] = []
+        # is_merged stored as 0/1 in SQLite
+        d["is_merged"] = bool(d.get("is_merged", False))
+        # created_at → str
+        if d.get("created_at") is not None:
+            d["created_at"] = str(d["created_at"])
+        return LifeEvent.model_validate(d)
+
+    def get_all_events(self, sort_by_year: bool = True) -> list[LifeEvent]:
         """
         获取所有事件
-        
+
         Args:
             sort_by_year: 是否按年份排序
-            
+
         Returns:
-            事件列表
+            LifeEvent 列表
         """
         cursor = self.conn.cursor()
-        
+
         if sort_by_year:
             cursor.execute("SELECT * FROM life_events ORDER BY year ASC")
         else:
             cursor.execute("SELECT * FROM life_events")
-        
-        events = []
-        for row in cursor.fetchall():
-            event = dict(row)
-            event['_id'] = str(event['id'])
-            events.append(event)
-        
-        return events
+
+        return [self._row_to_life_event(row) for row in cursor.fetchall()]
     
-    def get_character_profiles(self) -> List[Dict[str, Any]]:
+    def get_character_profiles(self) -> list[CharacterProfile]:
         """
         获取所有人物特征档案
-        
+
         Returns:
-            人物特征列表
+            CharacterProfile 列表
         """
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM character_profiles")
-        
+
         profiles = []
         for row in cursor.fetchall():
-            profile = dict(row)
-            profile['_id'] = str(profile['id'])
-            profiles.append(profile)
-        
+            d = dict(row)
+            if d.get("created_at") is not None:
+                d["created_at"] = str(d["created_at"])
+            profiles.append(CharacterProfile.model_validate(d))
+
         return profiles
-    
-    def get_character_profile(self) -> Optional[Dict[str, Any]]:
+
+    def get_character_profile(self) -> CharacterProfile | None:
         """
         获取合并后的人物特征档案（聚合所有档案）
-        
+
         Returns:
-            合并后的人物特征字典，如果没有数据则返回None
-            - personality: 合并后的性格描述字符串
-            - worldview: 合并后的世界观描述字符串
+            合并后的 CharacterProfile，如果没有数据则返回 None
         """
         profiles = self.get_character_profiles()
-        
+
         if not profiles:
             return None
-        
+
         # 收集所有非空段落
         personality_parts = []
         worldview_parts = []
-        
+
         for profile in profiles:
-            # personality和worldview是字符串格式（描述性段落）
-            if profile.get('personality'):
-                p = profile['personality'].strip()
-                if p:
-                    personality_parts.append(p)
-            
-            if profile.get('worldview'):
-                w = profile['worldview'].strip()
-                if w:
-                    worldview_parts.append(w)
-        
+            if profile.personality and profile.personality.strip():
+                personality_parts.append(profile.personality.strip())
+            if profile.worldview and profile.worldview.strip():
+                worldview_parts.append(profile.worldview.strip())
+
         # 拼接成完整段落（用双换行符分隔不同来源的段落）
-        merged = {
-            'personality': '\n\n'.join(personality_parts) if personality_parts else '',
-            'worldview': '\n\n'.join(worldview_parts) if worldview_parts else ''
-        }
-        
-        return merged
+        return CharacterProfile(
+            personality='\n\n'.join(personality_parts) if personality_parts else '',
+            worldview='\n\n'.join(worldview_parts) if worldview_parts else '',
+        )
     
     def get_character_profile_text(self) -> str:
         """
         获取格式化的人物侧写文本
-        
+
         Returns:
             格式化的人物侧写文本字符串
         """
         profile = self.get_character_profile()
-        
+
         if not profile:
             return "暂无人物侧写信息"
-        
-        # 格式化为可读文本
+
         parts = []
-        
-        if profile.get('personality'):
-            parts.append(f"**性格特征**：\n{profile['personality']}")
-        
-        if profile.get('worldview'):
-            parts.append(f"**世界观/价值观**：\n{profile['worldview']}")
-        
+
+        if profile.personality:
+            parts.append(f"**性格特征**：\n{profile.personality}")
+
+        if profile.worldview:
+            parts.append(f"**世界观/价值观**：\n{profile.worldview}")
+
         if not parts:
             return "暂无人物侧写信息"
-        
+
         return "\n\n".join(parts)
     
     def clear_events(self):

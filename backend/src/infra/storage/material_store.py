@@ -23,7 +23,7 @@ class MaterialStore:
     原始材料文件存储与 materials 元数据管理。
 
     文件命名规范：
-    - 用户上传文档：{原始文件名}-{时间戳}（如 1990年日记.txt-20260220T143052）
+    - 用户上传文档：{display_name}-{时间戳}（如 2023年日记-20260220T143052）
     - 采访记录：采访记录-{时间戳}
     """
 
@@ -40,6 +40,7 @@ class MaterialStore:
         filename: str,
         content_bytes: bytes,
         material_type: str = "document",
+        display_name: str = "",
     ) -> Tuple[str, str]:
         """
         将上传的文件写入 data/{username}/materials/ 目录。
@@ -49,6 +50,7 @@ class MaterialStore:
             filename: 原始文件名（如 "1990年日记.txt"）
             content_bytes: 文件内容（UTF-8 字节）
             material_type: "interview" | "document"
+            display_name: 用户输入的显示名（文档类型使用此名称作为存储文件名）
 
         Returns:
             (material_id, relative_file_path)
@@ -61,7 +63,9 @@ class MaterialStore:
         if material_type == "interview":
             stored_name = f"采访记录-{timestamp}"
         else:
-            safe_name = _safe_filename(filename)
+            # 文档类型：优先使用 display_name，回退到原始文件名
+            base_name = display_name.strip() or filename
+            safe_name = _safe_filename(base_name)
             stored_name = f"{safe_name}-{timestamp}"
 
         user_materials_dir = self.data_base_dir / username / "materials"

@@ -4,8 +4,8 @@ Event Refiner for Precise Year Events
 """
 import json
 import logging
-from typing import List, Dict, Any
-from src.application.contracts.llm import LLMGatewayProtocol
+from typing import List, Dict, Any, Optional
+from ....contracts.llm import LLMGatewayProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -100,14 +100,16 @@ DEDUP_PROMPT = """你是一位专业的人生传记整理专家。
 class EventRefiner:
     """精准年份事件优化器"""
     
-    def __init__(self, concurrency_manager: LLMGatewayProtocol):
+    def __init__(self, concurrency_manager: LLMGatewayProtocol, model: Optional[str] = None):
         """
         初始化
-        
+
         Args:
             concurrency_manager: 全局并发管理器
+            model: LLM 模型名称，None 则由网关决定
         """
         self.concurrency_manager = concurrency_manager
+        self.model = model
         
     async def refine_events(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -146,7 +148,7 @@ class EventRefiner:
             refined_events = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                model="deepseek-v3",
+                model=self.model,
                 temperature=0.1,
                 max_tokens=16384
             )

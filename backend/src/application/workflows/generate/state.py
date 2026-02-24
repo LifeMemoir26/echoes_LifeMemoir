@@ -4,17 +4,23 @@ from __future__ import annotations
 
 from typing import Any, Literal, NotRequired, TypedDict
 
+from ..core.state import WorkflowError
+
 
 class GenerateWorkflowState(TypedDict):
-    """State for timeline/memoir generation migration path."""
+    """State for timeline/memoir generation.
 
-    workflow_id: str
-    thread_id: str
+    thread_id, workflow_id, and username are NOT stored here — thread_id lives
+    in config["configurable"], and username is accessed from the runtime instance.
+
+    all_events / selected_events store LifeEvent.model_dump() dicts for
+    LangGraph JSON-serializable checkpoint compatibility.
+    """
+
     status: str
-    errors: list[dict[str, Any]]
+    errors: list[WorkflowError]
     metadata: dict[str, Any]
 
-    username: str
     mode: Literal["timeline", "memoir"]
     ratio: NotRequired[float]
     target_length: NotRequired[int]
@@ -31,5 +37,4 @@ class GenerateWorkflowState(TypedDict):
     timeline: NotRequired[list[dict[str, Any]]]
     memoir: NotRequired[str]
 
-    trace_id: NotRequired[str]
     failed_node: NotRequired[str]

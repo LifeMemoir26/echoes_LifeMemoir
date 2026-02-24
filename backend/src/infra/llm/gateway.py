@@ -10,13 +10,13 @@ import asyncio
 import time
 from typing import Any
 
-from src.application.contracts.llm import (
+from ...application.contracts.llm import (
     LLMGatewayChatResponse,
     LLMGatewayError,
     LLMGatewayUsage,
 )
-from src.application.contracts.errors import classify_infra_exception
-from src.infra.llm.concurrency_manager import (
+from ...application.contracts.errors import classify_infra_exception
+from .concurrency_manager import (
     ConcurrencyManager,
     get_concurrency_manager,
 )
@@ -128,57 +128,6 @@ class LLMGateway:
             return self._normalize_chat_response(raw=raw, latency_ms=latency_ms)
         except Exception as exc:
             raise classify_infra_exception(exc) from exc
-
-    async def batch_chat(
-        self,
-        requests: list[LLMChatRequest | dict[str, Any]],
-    ) -> list[LLMGatewayChatResponse]:
-        """Run batched chat requests and return standardized response list."""
-        normalized: list[LLMChatRequest] = [
-            req if isinstance(req, LLMChatRequest) else LLMChatRequest(**req)
-            for req in requests
-        ]
-        payload = [
-            {
-                "messages": req.messages,
-                "model": req.model,
-                "temperature": req.temperature,
-                "max_tokens": req.max_tokens,
-                "json_mode": req.json_mode,
-                "stream": req.stream,
-                "top_p": req.top_p,
-                "frequency_penalty": req.frequency_penalty,
-                "presence_penalty": req.presence_penalty,
-                **req.extra,
-            }
-            for req in normalized
-        ]
-        # Timeout can be controlled per request in chat; batch uses manager defaults.
-        start = time.perf_counter()
-        try:
-            raw_items = await self._manager.batch_chat(payload)
-        except Exception as exc:
-            raise classify_infra_exception(exc) from exc
-
-        elapsed_total_ms = (time.perf_counter() - start) * 1000
-        avg_latency_ms = elapsed_total_ms / len(raw_items) if raw_items else 0.0
-        items: list[LLMGatewayChatResponse] = []
-        for raw in raw_items:
-            if isinstance(raw, Exception):
-                items.append(
-                    self._normalize_chat_response(
-                        raw={"content": "", "model": ""},
-                        latency_ms=avg_latency_ms,
-                        error={
-                            "code": type(raw).__name__,
-                            "message": str(raw),
-                            "retryable": False,
-                        },
-                    )
-                )
-                continue
-            items.append(self._normalize_chat_response(raw=raw, latency_ms=avg_latency_ms))
-        return items
 
     async def generate_structured(
         self,

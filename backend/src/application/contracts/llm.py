@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
+
+if TYPE_CHECKING:
+    from ...infra.llm.models import LLMChatRequest, LLMStructuredRequest
 
 
 @runtime_checkable
 class LLMConfigLike(Protocol):
     """Minimal config surface consumed by application components."""
 
+    extraction_model: str
     conversation_model: str
+    creative_model: str
+    utility_model: str
 
 
 class LLMGatewayUsage(TypedDict, total=False):
@@ -43,10 +49,12 @@ class LLMGatewayProtocol(Protocol):
     config: LLMConfigLike
     concurrency_level: int
 
-    async def chat(self, *args: Any, **kwargs: Any) -> LLMGatewayChatResponse: ...
+    async def chat(
+        self, request: LLMChatRequest | None = None, **kwargs: Any
+    ) -> LLMGatewayChatResponse: ...
 
-    async def batch_chat(self, *args: Any, **kwargs: Any) -> list[LLMGatewayChatResponse]: ...
-
-    async def generate_structured(self, *args: Any, **kwargs: Any) -> dict | list: ...
+    async def generate_structured(
+        self, request: LLMStructuredRequest | None = None, **kwargs: Any
+    ) -> dict | list: ...
 
     def get_metrics_snapshot(self) -> dict[str, float | int]: ...

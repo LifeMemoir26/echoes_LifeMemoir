@@ -8,14 +8,15 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from src.infra.utils.text_splitter import TextSplitter, SplitterMode, DocumentSplitter
+from ....infra.utils.text_splitter import TextSplitter, SplitterMode
 from .extractor.life_event_extractor import LifeEventExtractor
 from .extractor.character_profile_extractor import CharacterProfileExtractor
-from src.infra.llm.client.qiniu_client import AsyncQiniuAIClient
-from src.application.contracts.llm import LLMGatewayProtocol
+from ....infra.llm.client.qiniu_client import AsyncQiniuAIClient
+from ...contracts.llm import LLMGatewayProtocol
 from ....core.config import LLMConfig
-from src.infra.database.sqlite_client import SQLiteClient
-from src.infra.database import EventStore, CharacterStore
+from ....infra.database.sqlite_client import SQLiteClient
+from ....infra.database import EventStore, CharacterStore
+from ....domain.schemas.knowledge import LifeEvent, CharacterProfile
 from ..refinement.refinement_application import RefinementPipeline
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,10 @@ logger = logging.getLogger(__name__)
 class ExtractionApplication:
     """
     知识图谱提取应用
-    
+
     工作流程：
-    1. 文本切分（8000字窗口，4000字步长）
-    2. 并发提取（每个chunk并发调用两个提取器）
+    1. 文本切分（8000字窗口，4000字步长，采访/文档统一）
+    2. 并发提取（每个chunk并发调用两个提取器，根据material_type选择提示词）
     3. 结果合并
     4. 写入SQLite
     """
@@ -55,7 +56,7 @@ class ExtractionApplication:
         self.concurrency_manager = llm_gateway
         self.config = llm_gateway.config
         
-        # 文本切分器（采访模式：8000字窗口，4000字步长）
+        # 文本切分器（统一8000字窗口，4000字步长）
         self.text_splitter = TextSplitter(
             mode=SplitterMode.KNOWLEDGE_EXTRACTION
         )
@@ -88,7 +89,8 @@ class ExtractionApplication:
         chunk_id: int,
         narrator_name: str,
         total_chunks: int,
-        material_context: str = ""
+        material_context: str = "",
+        material_type: str = "interview",
     ) -> tuple[str, int, int]:
         """提取事件并立即写入"""
         try:
@@ -96,9 +98,11 @@ class ExtractionApplication:
                 self.concurrency_manager,
                 model=self.config.extraction_model
             )
-            events = await event_extractor.extract(chunk, narrator_name, material_context=material_context)
+            events = await event_extractor.extract(chunk, narrator_name, material_context=material_context, material_type=material_type)
             if events:
-                count = self.event_store.write_events(events)
+                count = self.event_store.write_events(
+                    [LifeEvent.model_validate(e) for e in events]
+                )
                 if self.verbose:
                     print(f"   块 {chunk_id}/{total_chunks}: 事件{count}条已写入")
                 return ('events', chunk_id, count)
@@ -113,7 +117,8 @@ class ExtractionApplication:
         chunk_id: int,
         narrator_name: str,
         total_chunks: int,
-        material_context: str = ""
+        material_context: str = "",
+        material_type: str = "interview",
     ) -> tuple[str, int, int]:
         """提取特征并立即写入"""
         try:
@@ -121,9 +126,13 @@ class ExtractionApplication:
                 self.concurrency_manager,
                 model=self.config.extraction_model
             )
-            profile = await profile_extractor.extract(chunk, narrator_name, material_context=material_context)
+            profile = await profile_extractor.extract(chunk, narrator_name, material_context=material_context, material_type=material_type)
             if profile and (profile.get('personality') or profile.get('worldview') or profile.get('aliases')):
-                profile_id = self.character_store.write_profile(profile)
+                profile_model = CharacterProfile(
+                    personality=profile.get('personality', ''),
+                    worldview=profile.get('worldview', ''),
+                )
+                profile_id = self.character_store.write_profile(profile_model)
                 
                 # 写入别名到aliases表
                 if profile.get('aliases'):
@@ -158,27 +167,21 @@ class ExtractionApplication:
         Args:
             text: 待处理的文本
             narrator_name: 叙述者名称
-            material_type: 材料类型 "interview"（采访对话）或 "document"（自由文档）
-            material_context: 用户补充的背景说明，非空时注入提取提示词头部
+            material_type: 材料类型 "interview"（采访对话）或 "document"（自由文档），
+                           决定使用哪套提取提示词
+            material_context: 用户补充的背景说明，非空时注入系统提示词
 
         Returns:
             处理结果统计
         """
         start_time = asyncio.get_event_loop().time()
 
-        # 步骤1: 按材料类型选择切分器
-        if material_type == "document":
-            splitter = DocumentSplitter()
-            split_desc = "文档模式 (1500字窗口, 200字重叠)"
-        else:
-            splitter = self.text_splitter
-            split_desc = "采访模式 (8000字窗口, 4000字步长)"
-
-        self._print_step(1, 5, f"文本切分 ({split_desc})")
-        chunks = splitter.split(text)
+        # 步骤1: 统一使用8000字窗口切分（采访和文档相同窗口）
+        self._print_step(1, 5, f"文本切分 (8000字窗口, 4000字步长, 类型={material_type})")
+        chunks = self.text_splitter.split(text)
 
         if self.verbose:
-            print(f"   切分完成: {len(text)}字符 -> {len(chunks)}个块")
+            print(f"   切分完成: {len(text)}字符 -> {len(chunks)}个块 (类型: {material_type})")
         
         # 步骤2: 并发提取与写入（提取完立即写入，无需等待所有块）
         self._print_step(2, 5, f"并发提取与写入 (共{len(chunks)}个块)")
@@ -187,8 +190,8 @@ class ExtractionApplication:
         tasks = []
         for i, chunk in enumerate(chunks):
             chunk_id = i + 1
-            tasks.append(self._extract_and_write_events(chunk, chunk_id, narrator_name, len(chunks), material_context))
-            tasks.append(self._extract_and_write_profile(chunk, chunk_id, narrator_name, len(chunks), material_context))
+            tasks.append(self._extract_and_write_events(chunk, chunk_id, narrator_name, len(chunks), material_context, material_type))
+            tasks.append(self._extract_and_write_profile(chunk, chunk_id, narrator_name, len(chunks), material_context, material_type))
         
         # 并发执行所有任务（ConcurrencyManager内部自动排队和轮询）
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -215,7 +218,12 @@ class ExtractionApplication:
         self._print_step(3, 5, "LLM精炼去重")
         
         # 使用全局并发管理器进行精炼
-        refiner = RefinementPipeline(self.sqlite_client, self.concurrency_manager)
+        refiner = RefinementPipeline(
+            self.sqlite_client,
+            self.concurrency_manager,
+            extraction_model=self.config.extraction_model,
+            utility_model=getattr(self.config, 'utility_model', None),
+        )
         
         # 执行精炼流程
         refine_stats = await refiner.refine_all()

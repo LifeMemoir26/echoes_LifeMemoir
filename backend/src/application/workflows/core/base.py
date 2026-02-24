@@ -26,11 +26,15 @@ class WorkflowBase(ABC):
         """Return uncompiled StateGraph builder."""
 
     def traced_node(self, node_name: str, handler):
-        """Wrap node handler with runtime tracing events."""
+        """Wrap node handler with runtime tracing events.
 
-        async def _wrapped(state: dict[str, Any]) -> dict[str, Any]:
-            thread_id = state.get("thread_id", "unknown-thread")
-            trace_id = state.get("trace_id", thread_id)
+        The inner wrapper accepts (state, config) per LangGraph convention.
+        thread_id is read from config["configurable"]["thread_id"] — NOT from state.
+        """
+
+        async def _wrapped(state: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:
+            configurable = (config or {}).get("configurable") or {}
+            thread_id = configurable.get("thread_id", "unknown-thread")
             input_summary = summarize_payload(state)
             start = time.perf_counter()
             record_event(
@@ -38,7 +42,7 @@ class WorkflowBase(ABC):
                 workflow_id=self.workflow_id,
                 node=node_name,
                 event="start",
-                trace_id=trace_id,
+                trace_id=thread_id,
                 input_summary=input_summary,
             )
 
@@ -51,7 +55,7 @@ class WorkflowBase(ABC):
                     workflow_id=self.workflow_id,
                     node=node_name,
                     event="error",
-                    trace_id=trace_id,
+                    trace_id=thread_id,
                     elapsed_ms=elapsed_ms,
                     input_summary=input_summary,
                     error_summary=str(exc),
@@ -69,7 +73,7 @@ class WorkflowBase(ABC):
                 workflow_id=self.workflow_id,
                 node=node_name,
                 event=event,
-                trace_id=trace_id,
+                trace_id=thread_id,
                 elapsed_ms=elapsed_ms,
                 input_summary=input_summary,
                 output_summary=output_summary,
@@ -84,7 +88,7 @@ class WorkflowBase(ABC):
                         workflow_id=self.workflow_id,
                         node=node_name,
                         event="retry",
-                        trace_id=trace_id,
+                        trace_id=thread_id,
                         elapsed_ms=elapsed_ms,
                         retry_count=0,
                         input_summary=input_summary,
@@ -106,30 +110,13 @@ class WorkflowBase(ABC):
         if self._compiled is None:
             self.compile(use_checkpointer=True)
 
-        state_thread_id = initial_state.get("thread_id")
-        if isinstance(state_thread_id, str) and state_thread_id != thread_id:
-            trace_id = initial_state.get("trace_id", thread_id)
-            app_error = map_exception_to_app_error(
-                ValueError("thread_id mismatch between state and invoke config"),
-                trace_id=trace_id,
-                failed_node=initial_state.get("failed_node", "workflow_entry"),
-                error_code="WORKFLOW_THREAD_MISMATCH",
-            )
-            return {
-                **initial_state,
-                "status": "failed",
-                "failed_node": "workflow_entry",
-                "errors": [app_error.model_dump()],
-            }
-
         config = {"configurable": {"thread_id": thread_id}}
         try:
             return await self._compiled.ainvoke(initial_state, config=config)
         except Exception as exc:
-            trace_id = initial_state.get("trace_id", thread_id)
             app_error = map_exception_to_app_error(
                 exc,
-                trace_id=trace_id,
+                trace_id=thread_id,
                 failed_node=initial_state.get("failed_node"),
             )
             return {
@@ -145,32 +132,19 @@ class WorkflowBase(ABC):
         """Stream per-node updates using LangGraph stream_mode='updates'.
 
         Each yielded item is {node_name: node_output_dict}.
-        On thread_id mismatch or graph exception, yields {"__error__": {...}} and stops.
+        On graph exception, yields {"__error__": {...}} and stops.
         """
         if self._compiled is None:
             self.compile(use_checkpointer=True)
-
-        state_thread_id = initial_state.get("thread_id")
-        if isinstance(state_thread_id, str) and state_thread_id != thread_id:
-            trace_id = initial_state.get("trace_id", thread_id)
-            app_error = map_exception_to_app_error(
-                ValueError("thread_id mismatch between state and invoke config"),
-                trace_id=trace_id,
-                failed_node=initial_state.get("failed_node", "workflow_entry"),
-                error_code="WORKFLOW_THREAD_MISMATCH",
-            )
-            yield {"__error__": {"status": "failed", "errors": [app_error.model_dump()]}}
-            return
 
         config = {"configurable": {"thread_id": thread_id}}
         try:
             async for update in self._compiled.astream(initial_state, config=config, stream_mode="updates"):
                 yield update
         except Exception as exc:
-            trace_id = initial_state.get("trace_id", thread_id)
             app_error = map_exception_to_app_error(
                 exc,
-                trace_id=trace_id,
+                trace_id=thread_id,
                 failed_node=initial_state.get("failed_node"),
             )
             yield {"__error__": {"status": "failed", "errors": [app_error.model_dump()]}}

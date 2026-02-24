@@ -103,7 +103,7 @@ class VectorStore:
             )
 
             for hit in hits:
-                score = hit["score"]
+                score = hit.score
                 if return_dissimilar:
                     if score >= similarity_threshold:
                         continue  # 只保留低于阈值的（不相似）
@@ -114,8 +114,8 @@ class VectorStore:
                 results.append(
                     {
                         "query_summary": summary,
-                        "matched_summary": hit["summary_text"],
-                        "matched_chunk": hit["chunk_text"],
+                        "matched_summary": hit.summary_text,
+                        "matched_chunk": hit.chunk_text,
                         "similarity": score,
                     }
                 )
@@ -149,10 +149,10 @@ class VectorStore:
 
         return [
             {
-                "id": f"sum_{h['chunk_id']}",
-                "document": h["summary_text"],
-                "score": h["score"],
-                "metadata": {"chunk_id": h["chunk_id"]},
+                "id": f"sum_{h.chunk_id}",
+                "document": h.summary_text,
+                "score": h.score,
+                "metadata": {"chunk_id": h.chunk_id},
             }
             for h in hits
         ]

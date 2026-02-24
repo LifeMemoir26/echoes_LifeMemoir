@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ....core.paths import get_data_root
-from src.application.contracts.llm import LLMGatewayProtocol
+from ....application.contracts.llm import LLMGatewayProtocol
 from ....application.knowledge.extraction.extraction_application import (
     ExtractionApplication,
 )
@@ -55,7 +55,7 @@ class KnowledgeWorkflowRuntime:
             llm_gateway=llm_gateway,
             vector_store=vector_store,
             data_root=str(data_base_dir),
-            model="deepseek-v3",
+            model=llm_gateway.config.extraction_model,
         )
 
         return cls(

@@ -23,22 +23,22 @@ class LLMConfig(BaseSettings):
     
     # 模型选择 (基于七牛云可用模型)
     extraction_model: str = Field(
-        default="deepseek-v3",
-        description="用于结构化提取的模型（深度推理，适合实体/事件/时间提取）"
+        default="deepseek/deepseek-v3.2-251201",
+        description="知识库结构化提取 + 精炼（事件/人物/去重/年份推理）"
     )
     conversation_model: str = Field(
-        default="deepseek-v3",
-        description="用于情感/风格分析的模型（安全可靠，擅长深度分析）"
+        default="deepseek/deepseek-v3.2-251201",
+        description="采访实时分析（摘要/补充/情感/待探索事件）"
     )
-    fast_model: str = Field(
-        default="deepseek-v3",
-        description="用于快速任务的模型（统一使用deepseek）"
+    creative_model: str = Field(
+        default="claude-3.7-sonnet",
+        description="文学写作（回忆录、时间轴叙述）— 产品核心输出"
     )
-    backup_model: str = Field(
-        default="deepseek-v3",
-        description="备选通用模型（统一使用deepseek）"
+    utility_model: str = Field(
+        default="deepseek/deepseek-v3.2-251201",
+        description="轻量机械任务（JSON修复、事件合并、别名去重）"
     )
-    
+
     # 生成参数
     extraction_temperature: float = Field(default=0.1, description="提取任务温度（低=精确）")
     conversation_temperature: float = Field(default=0.7, description="对话任务温度")
@@ -76,15 +76,10 @@ class LLMConfig(BaseSettings):
 
 class EmbeddingConfig(BaseSettings):
     """嵌入模型配置 — Gemini Embedding API"""
-    gemini_api_key: str = Field(
-        default="",
-        validation_alias=AliasChoices("GEMINI_API_KEY", "gemini_api_key", "EMBEDDING_GEMINI_API_KEY"),
-        description="Gemini API Key（主密钥）"
-    )
     gemini_api_keys_str: str = Field(
         default="",
         validation_alias=AliasChoices("GEMINI_API_KEYS", "gemini_api_keys_str"),
-        description="Gemini API Keys 列表（逗号分隔，用于轮换）"
+        description="Gemini API Keys（逗号分隔，用于轮换）"
     )
     model_name: str = Field(
         default="models/gemini-embedding-001",
@@ -102,14 +97,10 @@ class EmbeddingConfig(BaseSettings):
     @property
     def api_keys(self) -> list[str]:
         """获取所有可用的 Gemini API key 列表"""
-        # 优先用逗号分隔的多 key 列表
         if self.gemini_api_keys_str:
             keys = [k.strip() for k in self.gemini_api_keys_str.split(",") if k.strip()]
             if keys:
                 return keys
-        # fallback 到单个主 key
-        if self.gemini_api_key:
-            return [self.gemini_api_key]
         return []
 
     class Config:

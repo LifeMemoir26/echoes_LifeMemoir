@@ -4,8 +4,8 @@ Character Profile Refiner
 """
 import json
 import logging
-from typing import Dict, Any, List
-from src.application.contracts.llm import LLMGatewayProtocol
+from typing import Dict, Any, List, Optional
+from ....contracts.llm import LLMGatewayProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -157,14 +157,18 @@ ALIAS_REFINE_PROMPT = """你是一位专业的人物关系整理专家。
 class CharacterProfileRefiner:
     """人物档案优化器"""
     
-    def __init__(self, concurrency_manager: LLMGatewayProtocol):
+    def __init__(self, concurrency_manager: LLMGatewayProtocol, model: Optional[str] = None, utility_model: Optional[str] = None):
         """
         初始化
-        
+
         Args:
             concurrency_manager: 全局并发管理器
+            model: 主 LLM 模型名称，None 则由网关决定
+            utility_model: 工具类 LLM 模型名称，None 则由网关决定
         """
         self.concurrency_manager = concurrency_manager
+        self.model = model
+        self.utility_model = utility_model
         
     async def refine_profile(self, profile: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -224,27 +228,28 @@ class CharacterProfileRefiner:
             response = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
+                model=self.model,
                 temperature=0.1,
                 max_tokens=2048
             )
-            
+
             # 提取文本描述
             if isinstance(response, dict) and "text" in response:
                 refined_text = response["text"].strip()
             else:
                 raise ValueError("返回格式错误：缺少text字段")
-            
+
             # 验证字数限制
             if len(refined_text) > 350:
                 logger.warning(f"性格描述超过300字限制：{len(refined_text)}字")
-                
+
             logger.info(f"性格优化完成：{len(personality)} 条 → 文字描述 {len(refined_text)}字")
             return refined_text
-            
+
         except Exception as e:
             logger.error(f"性格优化失败: {e}")
             raise
-            
+
     async def _refine_worldview(self, worldview: List[str]) -> str:
         """优化世界观"""
         logger.info(f"优化世界观：{len(worldview)} 条")
@@ -265,27 +270,28 @@ class CharacterProfileRefiner:
             response = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
+                model=self.model,
                 temperature=0.1,
                 max_tokens=2048
             )
-            
+
             # 提取文本描述
             if isinstance(response, dict) and "text" in response:
                 refined_text = response["text"].strip()
             else:
                 raise ValueError("返回格式错误：缺少text字段")
-            
+
             # 验证字数限制
             if len(refined_text) > 350:
                 logger.warning(f"世界观描述超过300字限制：{len(refined_text)}字")
-                
+
             logger.info(f"世界观优化完成：{len(worldview)} 条 → 文字描述 {len(refined_text)}字")
             return refined_text
-            
+
         except Exception as e:
             logger.error(f"世界观优化失败: {e}")
             raise
-            
+
     async def _refine_aliases(self, aliases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """优化别名关联"""
         logger.info(f"优化别名关联：{len(aliases)} 条")
@@ -304,6 +310,7 @@ class CharacterProfileRefiner:
             refined = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
+                model=self.utility_model,
                 temperature=0.1,
                 max_tokens=4096
             )

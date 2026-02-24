@@ -7,7 +7,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from pydantic import BaseModel, Field
 import asyncio
 
-from src.application.contracts.llm import LLMGatewayProtocol
+from ...contracts.llm import LLMGatewayProtocol
 from ....domain.schemas.interview import PendingEvent
 from ..dialogue_storage import TextChunk
 
@@ -35,14 +35,23 @@ class PendingEventProcessor:
     2. 合并已有的探索内容和新提取的内容，去除冗余
     """
     
-    def __init__(self, llm_gateway: LLMGatewayProtocol):
+    def __init__(
+        self,
+        llm_gateway: LLMGatewayProtocol,
+        model: Optional[str] = None,
+        utility_model: Optional[str] = None,
+    ):
         """
         初始化待探索事件处理器
-        
+
         Args:
             llm_gateway: LLM 运行时网关实例
+            model: 事件提取使用的模型
+            utility_model: 机械合并任务使用的模型
         """
         self.concurrency_manager = llm_gateway
+        self.model = model
+        self.utility_model = utility_model
         logger.info("PendingEventProcessor initialized")
     
     async def extract_pending_event_details(
@@ -127,7 +136,7 @@ class PendingEventProcessor:
             result = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                model=None,
+                model=self.model,
                 temperature=0.2
             )
             
@@ -382,7 +391,7 @@ class PendingEventProcessor:
             result = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                model=None,
+                model=self.utility_model,
                 temperature=0.1  # 低温度保证稳定性
             )
             

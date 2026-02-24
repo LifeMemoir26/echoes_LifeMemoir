@@ -4,8 +4,8 @@
 """
 
 import logging
-from typing import List, Dict, Any
-from src.application.contracts.llm import LLMGatewayProtocol
+from typing import List, Dict, Any, Optional
+from ....contracts.llm import LLMGatewayProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ SUMMARY_USER_PROMPT = """请从以下对话文本chunk中提取对话概要。
 class EventSummaryExtractor:
     """事件摘要提取器"""
     
-    def __init__(self, concurrency_manager: LLMGatewayProtocol, model: str = "claude-3.7-sonnet"):
+    def __init__(self, concurrency_manager: LLMGatewayProtocol, model: Optional[str] = None):
         """
         初始化提取器
         

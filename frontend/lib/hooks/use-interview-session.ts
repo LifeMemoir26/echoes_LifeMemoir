@@ -170,6 +170,24 @@ export function useInterviewSession() {
     setRecoverableSessionId(normalizedSessionId);
   }, []);
 
+  /** Close existing conflicting session then create a fresh one. */
+  const forceCreate = useCallback(async (username: string) => {
+    if (inFlightCommand) return null;
+
+    // Close the old session first (best-effort — ignore errors)
+    if (recoverableSessionId) {
+      try {
+        await closeInterviewSession(recoverableSessionId);
+      } catch { /* old session may already be gone */ }
+    }
+
+    setRecoverableSessionId(null);
+    setState("idle");
+    setError(null);
+
+    return create(username);
+  }, [inFlightCommand, recoverableSessionId, create]);
+
   const syncFromServerEvent = useCallback((serverStatus: string | null | undefined, eventSessionId?: string | null) => {
     if (!serverStatus) {
       return;
@@ -224,6 +242,7 @@ export function useInterviewSession() {
     inFlightCommand,
     canSubmitCommand,
     create,
+    forceCreate,
     send,
     flush,
     close,

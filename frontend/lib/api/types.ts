@@ -34,15 +34,6 @@ export type MemoirGenerateData = {
   trace_id: string;
 };
 
-export type KnowledgeProcessData = {
-  username: string;
-  original_filename: string;
-  stored_path: string;
-  uploaded_at: string;
-  trace_id: string;
-  workflow_result: Record<string, unknown>;
-};
-
 export type TimelineEvent = {
   event_id: number;
   time: string;
@@ -176,4 +167,62 @@ export type NormalizedApiError = {
   retryable: boolean;
   traceId?: string;
   details?: Record<string, unknown>;
+};
+
+// ── Knowledge domain types ──────────────────────────────────
+
+export type EventItem = {
+  id: number;
+  year: string;
+  time_detail: string | null;
+  event_summary: string;
+  event_details: string | null;
+  is_merged: boolean;
+  created_at: string;
+  life_stage: string | null;
+  event_category: string[];
+  confidence: "high" | "medium" | "low" | null;
+  source_material_id: string | null;
+};
+
+export type EventsListData = {
+  events: EventItem[];
+};
+
+export type ProfileData = {
+  personality: string;
+  worldview: string;
+};
+
+export type MaterialItem = {
+  id: string;
+  filename: string;
+  display_name: string;
+  material_type: string;
+  material_context: string;
+  file_path: string | null;
+  file_size: number;
+  status: "pending" | "processing" | "done" | "failed";
+  events_count: number;
+  chunks_count: number;
+  uploaded_at: string;
+  processed_at: string | null;
+};
+
+export type MaterialsListData = {
+  materials: MaterialItem[];
+};
+
+export type MaterialUploadItem = {
+  file_name: string;
+  status: "success" | "error";
+  material_id: string | null;
+  events_count: number;
+  error_message: string | null;
+};
+
+export type MaterialUploadData = {
+  items: MaterialUploadItem[];
+  total_files: number;
+  success_count: number;
 };

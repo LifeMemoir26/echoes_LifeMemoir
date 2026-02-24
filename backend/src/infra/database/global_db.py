@@ -20,7 +20,7 @@ class GlobalDB:
 
     def __init__(self, data_dir: Optional[Path] = None):
         if data_dir is None:
-            from src.core.paths import get_data_root
+            from ...core.paths import get_data_root
             data_dir = get_data_root()
 
         data_dir.mkdir(parents=True, exist_ok=True)

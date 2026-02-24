@@ -20,7 +20,7 @@ export class ApiRequestError extends Error {
   }
 }
 
-function isApiError(value: unknown): value is ApiError {
+export function isApiError(value: unknown): value is ApiError {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   return (
@@ -200,11 +200,26 @@ export async function apiDelete<TData>(path: string): Promise<TData> {
   });
 }
 
+export async function apiPatch<TData>(path: string): Promise<TData> {
+  return requestJson<TData>(`${API_BASE_URL}${path}`, {
+    method: "PATCH",
+    headers: getAuthHeaders()
+  });
+}
+
 export async function apiGet<TData>(path: string, signal?: AbortSignal): Promise<TData> {
   return requestJson<TData>(`${API_BASE_URL}${path}`, {
     method: "GET",
     headers: getAuthHeaders(),
     signal
+  });
+}
+
+export async function apiPostFormData<TData>(path: string, formData: FormData): Promise<TData> {
+  return requestJson<TData>(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
   });
 }
 

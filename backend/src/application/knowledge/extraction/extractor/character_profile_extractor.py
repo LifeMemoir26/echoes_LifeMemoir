@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from src.application.contracts.llm import LLMGatewayProtocol
+from ....contracts.llm import LLMGatewayProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +54,15 @@ class CharacterProfileExtractor:
 - 不要添加任何解释文字
 - 直接输出纯JSON对象，**输出需要以 } 结束，需要以 { 开始**。"""
     
-    USER_PROMPT_TEMPLATE = """请从以下文本中分析{narrator_name}的特征。
+    USER_PROMPT_TEMPLATE = """请从以下采访对话中分析{narrator_name}的特征。
+
+**采访对话格式说明**：文本为采访者（[Interviewer]）与叙述者之间的对话记录，重点关注叙述者的回答内容。
 
 **分析要求**：
 
 1. 性格特点（personality）：
    - 用一段描述性文字总结性格特征（150-250字）
-   - 基于具体行为和表述推断
+   - 基于叙述者在对话中的具体行为和表述推断
    - 呈现性格的多面性和复杂性
    - 用流畅的段落文字表达，严禁返回列表或数组
    - 例如："表现出乐观开朗的性格特质，面对困难时展现出坚韧不拔的意志。在家庭关系中体现出注重亲情、珍惜陪伴的特点。"
@@ -81,7 +83,39 @@ class CharacterProfileExtractor:
      * {{"类型": "地名", "正式名称": "北京市", "别名列表": ["北京", "首都"]}}
      * {{"类型": "物品", "正式名称": "自行车", "别名列表": ["单车", "脚踏车"]}}
 
-**文本内容**：
+**采访对话内容**：
+{text}"""
+
+    USER_PROMPT_TEMPLATE_DOCUMENT = """请从以下文档中分析{narrator_name}的特征。
+
+**文档格式说明**：文本为用户提供的文档（如日记、回忆录、自传、随笔等）。关于文中人物身份和关系，请参考系统提示词中的「背景说明」。
+
+**分析要求**：
+
+1. 性格特点（personality）：
+   - 用一段描述性文字总结性格特征（150-250字）
+   - 基于文中的具体行为描写和自我表述推断
+   - 呈现性格的多面性和复杂性
+   - 用流畅的段落文字表达，严禁返回列表或数组
+   - 例如："表现出乐观开朗的性格特质，面对困难时展现出坚韧不拔的意志。在家庭关系中体现出注重亲情、珍惜陪伴的特点。"
+
+2. 世界观与价值观（worldview）：
+   - 用一段描述性文字总结对重要事物的看法和态度（150-250字）
+   - 关注对工作、家庭、人际、社会等的看法
+   - 揭示其价值判断和信念体系
+   - 用流畅的段落文字表达，严禁返回列表或数组
+   - 例如："认为家庭和睦比事业成功更重要，相信努力就能改变命运。对待工作持务实态度，强调实际成果胜过形式主义。"
+
+3. 别名关联（aliases）：
+   - 提取文本中出现的人名、地名、物品的别名和正式名称的关联
+   - 格式：{{"类型": "人名/地名/物品", "正式名称": "XXX", "别名列表": ["别名1", "别名2"]}}
+   - 最常出现的名字放在开头，但最正规的名字要么放在开头要么放在第二个
+   - 例如：
+     * {{"类型": "人名", "正式名称": "张三", "别名列表": ["老张", "张师傅", "三哥"]}}
+     * {{"类型": "地名", "正式名称": "北京市", "别名列表": ["北京", "首都"]}}
+     * {{"类型": "物品", "正式名称": "自行车", "别名列表": ["单车", "脚踏车"]}}
+
+**文档内容**：
 {text}"""
     
     def __init__(
@@ -104,6 +138,7 @@ class CharacterProfileExtractor:
         text: str,
         narrator_name: str = "叙述者",
         material_context: str = "",
+        material_type: str = "interview",
     ) -> Dict[str, Any]:
         """
         从文本中提取人物特征
@@ -112,18 +147,21 @@ class CharacterProfileExtractor:
             text: 待提取的文本
             narrator_name: 叙述者名称
             material_context: 用户补充的背景说明（非空时注入提示词头部）
+            material_type: "interview" 或 "document"，决定使用哪套提示词
         """
         try:
-            user_prompt = self.USER_PROMPT_TEMPLATE.format(
+            template = self.USER_PROMPT_TEMPLATE_DOCUMENT if material_type == "document" else self.USER_PROMPT_TEMPLATE
+            user_prompt = template.format(
                 narrator_name=narrator_name,
                 text=text
             )
+            system_prompt = self.SYSTEM_PROMPT
             if material_context:
-                user_prompt = f"[背景说明]\n{material_context}\n\n{user_prompt}"
+                system_prompt = f"{system_prompt}\n\n[背景说明]\n{material_context}"
 
             profile = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
-                system_prompt=self.SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 model=self.model,
                 temperature=0.3
             )

@@ -30,4 +30,32 @@
   --brass-gradient: linear-gradient(135deg, #f8d978 0%, #e5b93f 100%);
   --engraved-text: none;
   --focus-ring: 0 0 0 3px rgba(162, 132, 94, 0.3);
+
+  /* ── Glass materials — warm-tinted glassmorphism ── */
+  --glass-thick: rgba(245, 237, 228, 0.95);
+  --glass-default: rgba(245, 237, 228, 0.80);
+  --glass-thin: rgba(245, 237, 228, 0.60);
+  --glass-ultrathin: rgba(245, 237, 228, 0.40);
+
+  /* ── Layered shadow system — warm-toned depth ── */
+  --shadow-card:
+    0 0 0 1px rgba(162, 132, 94, 0.08),
+    0 4px 6px rgba(162, 132, 94, 0.04);
+  --shadow-card-hover:
+    0 0 0 1px rgba(162, 132, 94, 0.10),
+    0 8px 16px rgba(162, 132, 94, 0.08);
+  --shadow-perfect:
+    0 0 0 1px rgba(162, 132, 94, 0.06),
+    0 1px 1px -0.5px rgba(162, 132, 94, 0.04),
+    0 3px 3px -1.5px rgba(162, 132, 94, 0.04),
+    0 6px 6px -3px rgba(162, 132, 94, 0.04),
+    0 12px 12px -6px rgba(162, 132, 94, 0.03),
+    0 24px 24px -12px rgba(162, 132, 94, 0.02);
+  --shadow-context-menu:
+    rgba(162, 132, 94, 0.067) 0px 3px 8px,
+    rgba(162, 132, 94, 0.067) 0px 2px 5px,
+    rgba(162, 132, 94, 0.067) 0px 1px 1px;
+
+  /* ── Focus glow (lighter version for inputs) ── */
+  --focus-glow: 0 0 0 3px rgba(162, 132, 94, 0.15);
 }

@@ -2,22 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
+
+from ..core.state import WorkflowError
+
+
+class ExtractionStats(TypedDict):
+    """Statistics from the knowledge extraction stage."""
+
+    events_count: int
+    events_before_refine: int
+    events_year_inferred: int
+    total_time: float
 
 
 class KnowledgeWorkflowState(TypedDict):
-    """State for knowledge pipeline migration path."""
+    """State for the knowledge pipeline.
 
-    workflow_id: str
-    thread_id: str
+    thread_id, workflow_id, username are NOT stored here — they are accessed
+    from config["configurable"] or from the workflow's runtime instance.
+    """
+
     status: str
-    errors: list[dict[str, Any]]
+    errors: list[WorkflowError]
     metadata: dict[str, Any]
 
-    username: str
     file_path: str
     narrator_name: NotRequired[str]
-    verbose: NotRequired[bool]
 
     file_name: NotRequired[str]
     file_size_kb: NotRequired[float]
@@ -31,9 +42,8 @@ class KnowledgeWorkflowState(TypedDict):
     total_time: NotRequired[float]
     data_dir: NotRequired[str]
 
-    trace_id: NotRequired[str]
     failed_node: NotRequired[str]
 
-    material_type: NotRequired[str]      # "interview" | "document"
-    material_context: NotRequired[str]   # 用户填写的背景说明
-    material_id: NotRequired[str]        # materials 表主键（UUID）
+    material_type: NotRequired[Literal["interview", "document"]]
+    material_context: NotRequired[str]
+    material_id: NotRequired[str]

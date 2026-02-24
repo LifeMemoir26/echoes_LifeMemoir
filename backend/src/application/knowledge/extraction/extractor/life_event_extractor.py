@@ -6,7 +6,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from src.application.contracts.llm import LLMGatewayProtocol
+from ....contracts.llm import LLMGatewayProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class LifeEventExtractor:
 - 不要添加任何解释文字
 - 直接输出JSON数组，**输出需要以 ] 结束，需要以 [ 开始**。"""
     
-    USER_PROMPT_TEMPLATE = """请从以下文本中提取{narrator_name}的重要人生事件。
+    USER_PROMPT_TEMPLATE = """请从以下采访对话中提取{narrator_name}的重要人生事件。
 
 **重要事件包括**：
 1. 结婚、离婚、重要恋爱关系
@@ -118,14 +118,77 @@ class LifeEventExtractor:
    - **引用对话原文**：优先引用对话中叙述者的原话和关键描述（用中文单引号）
    - **详实记录**：对话中提到的具体细节都应该记录，不省略重要信息
 
-4. 只提取确实发生的重要事件，不要提取：
+4. **采访对话格式说明**：
+   - 文本为采访者（[Interviewer]）与叙述者之间的对话记录
+   - 重点关注叙述者的回答内容，采访者的提问仅供理解上下文
+   - 叙述者在回答中提到的事件才是提取目标
+
+5. 只提取确实发生的重要事件，不要提取：
    - 日常琐事
    - 情绪描述
    - 观点看法
    - 假设性事件
    - 他人的事件（除非是{narrator_name}的亲人重大变动）
 
-**文本内容**：
+**采访对话内容**：
+{text}"""
+
+    USER_PROMPT_TEMPLATE_DOCUMENT = """请从以下文档中提取{narrator_name}的重要人生事件。
+
+**重要事件包括**：
+1. 结婚、离婚、重要恋爱关系
+2. 工作变动：入职、离职、升职、调动、退休
+3. 教育经历：入学、毕业、深造
+4. 参军、退伍、服役经历
+5. 重大手术、严重疾病、身体状态重大变化
+6. 重要贡献：获奖、发明、发表作品、社会贡献
+7. 亲人重大变动：出生、去世、重要关系变化
+8. 居住地迁移、出国、移民
+9. 重大财务事件：创业、破产、重大投资
+10. 人生转折点：信仰改变、价值观转变
+
+**提取要求**：
+1. 时间格式：
+   - 第一段（year）：精准的年份（如"1985"、"2010"）
+     * 如果时间模糊或不确定，填"9999"
+   - 第二段（time_detail）：补充信息
+     * 有精准年份时：填季节或月日（如"春季"、"3月15日"、"秋天"）
+     * 无精准年份时：填时间段（如"1990年到1995年"、"20世纪90年代"、"青年时期"）
+     * 或填写可用来推断的线索信息
+
+2. 事件说明（event_summary）：
+   - 简练准确，10-30字
+   - **必须包含明确主语**：例如"{narrator_name}从北京大学毕业"、"{narrator_name}与妻子结婚"
+   - 突出事件核心要素
+   - 客观描述，不加主观评价
+   - **只提取{narrator_name}本人的人生事件**，不要提取他人的事件
+
+3. **详细描述（event_details）**：
+   - **从作者视角出发**，根据文本内容详细记录事件，越详细越好但**不超过300字**
+   - 如果文本信息丰富，尽可能详细记录：
+     * 时间细节（具体日期、时长、背景时间、文中提及的时间线索）
+     * 地点细节（具体地点、场所、地理位置、文中对场景的描述）
+     * 人物细节（参与者、相关人物、角色关系、文中对人物的描述）
+     * 过程细节（事件经过、关键步骤、因果关系、文中叙述的过程）
+     * 结果细节（事件结果、影响、后续发展、作者的感受或观察）
+   - 如果文本信息较少，量力而行总结文本中的有效信息即可
+   - **尊重原文表述**：按照文本中的叙述方式记录，保留原文的语气和视角
+   - **引用原文**：优先引用文本中的关键描述和原话（用中文单引号）
+   - **详实记录**：文中提到的具体细节都应该记录，不省略重要信息
+
+4. **文档格式说明**：
+   - 文本为用户提供的文档（如日记、回忆录、自传、随笔等）
+   - 关于文中人物身份和关系，请参考系统提示词中的「背景说明」
+   - 注意区分叙事内容与引用他人的话语
+
+5. 只提取确实发生的重要事件，不要提取：
+   - 日常琐事
+   - 情绪描述
+   - 观点看法
+   - 假设性事件
+   - 他人的事件（除非是{narrator_name}的亲人重大变动）
+
+**文档内容**：
 {text}"""
     
     def __init__(
@@ -148,6 +211,7 @@ class LifeEventExtractor:
         text: str,
         narrator_name: str = "叙述者",
         material_context: str = "",
+        material_type: str = "interview",
     ) -> List[Dict[str, Any]]:
         """
         从文本中提取人生事件
@@ -156,18 +220,21 @@ class LifeEventExtractor:
             text: 待提取的文本
             narrator_name: 叙述者名称
             material_context: 用户补充的背景说明（非空时注入提示词头部）
+            material_type: "interview" 或 "document"，决定使用哪套提示词
         """
         try:
-            user_prompt = self.USER_PROMPT_TEMPLATE.format(
+            template = self.USER_PROMPT_TEMPLATE_DOCUMENT if material_type == "document" else self.USER_PROMPT_TEMPLATE
+            user_prompt = template.format(
                 narrator_name=narrator_name,
                 text=text
             )
+            system_prompt = self.SYSTEM_PROMPT
             if material_context:
-                user_prompt = f"[背景说明]\n{material_context}\n\n{user_prompt}"
+                system_prompt = f"{system_prompt}\n\n[背景说明]\n{material_context}"
 
             events = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
-                system_prompt=self.SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 model=self.model,
                 temperature=0.1
             )
@@ -218,10 +285,7 @@ class LifeEventExtractor:
             event['life_stage'] = '未知'
 
         if not isinstance(event.get('event_category'), list):
-            event['event_category'] = '[]'
-        else:
-            import json as _json
-            event['event_category'] = _json.dumps(event['event_category'], ensure_ascii=False)
+            event['event_category'] = []
 
         # confidence：根据 year 推断默认值
         if 'confidence' not in event or event['confidence'] not in ('high', 'medium', 'low'):

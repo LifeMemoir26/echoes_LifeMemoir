@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery } from "@tanstack/react-query";
 import { ApiRequestError, normalizeUnknownError } from "@/lib/api/client";
 import { generateTimeline, getSavedTimeline } from "@/lib/api/timeline";
 import { useWorkspaceContext } from "@/lib/workspace/context";
@@ -35,6 +35,7 @@ export function useGenerateTimeline() {
   }
 
   const mutation = useMutation<TimelineGenerateData, Error, TimelineGenerateRequest, { requestId: number }>({
+    mutationKey: ["generate-timeline"],
     mutationFn: async (payload) => {
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -68,7 +69,25 @@ export function useGenerateTimeline() {
     }
   });
 
-  const phase: GenerateTimelinePhase = mutation.isPending
+  // ── Survive navigation: observe global MutationCache ──────────────────────
+  const globalPending = useMutationState({
+    filters: { mutationKey: ["generate-timeline"], status: "pending" },
+    select: () => true as const,
+  });
+  const globalSuccessData = useMutationState({
+    filters: { mutationKey: ["generate-timeline"], status: "success" },
+    select: (m) => m.state.data as TimelineGenerateData | undefined,
+  });
+  const isGloballyPending = !mutation.isPending && globalPending.length > 0;
+
+  // Pick up data from a mutation that completed while we were on another page
+  useEffect(() => {
+    if (data || mutation.isPending) return;
+    const latest = globalSuccessData[globalSuccessData.length - 1];
+    if (latest) setData(latest);
+  }, [globalSuccessData, data, mutation.isPending]);
+
+  const phase: GenerateTimelinePhase = (mutation.isPending || isGloballyPending)
     ? "pending"
     : error
       ? "error"
@@ -158,7 +177,7 @@ export function useGenerateTimeline() {
     phase,
     data,
     error,
-    isPending: mutation.isPending,
+    isPending: mutation.isPending || isGloballyPending,
     canRetry: Boolean(error?.retryable && lastRequest),
     lastRequest,
     submit,

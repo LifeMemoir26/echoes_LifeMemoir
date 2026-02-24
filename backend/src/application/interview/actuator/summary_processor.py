@@ -6,10 +6,9 @@ import logging
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-from src.application.contracts.llm import LLMGatewayProtocol
+from ...contracts.llm import LLMGatewayProtocol
 from ....core.config import InterviewAssistanceConfig, get_settings
 from ..dialogue_storage import TextChunk
-from ..dialogue_storage.summary import SummaryManager
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +38,19 @@ class SummaryProcessor:
     def __init__(
         self,
         llm_gateway: LLMGatewayProtocol,
-        config: Optional[InterviewAssistanceConfig] = None
+        config: Optional[InterviewAssistanceConfig] = None,
+        model: Optional[str] = None,
     ):
         """
         初始化总结处理器
-        
+
         Args:
             llm_gateway: LLM 运行时网关实例
             config: 采访辅助配置
+            model: 使用的模型名称
         """
         self.concurrency_manager = llm_gateway
+        self.model = model
         
         # 加载配置
         if config is None:
@@ -127,7 +129,7 @@ class SummaryProcessor:
             result = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                model=None,  # 使用默认模型
+                model=self.model,
                 temperature=0.3  # 较低温度以保证结构化输出稳定
             )
             

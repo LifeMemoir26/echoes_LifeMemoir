@@ -107,12 +107,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           if (raw) {
             const parsed: TimelineGenerationCache = JSON.parse(raw);
             if (isFresh(parsed.savedAt)) {
-              // Pending requests can't be resumed — degrade to error
-              const restored: TimelineGenerationCache =
-                parsed.phase === "pending"
-                  ? { ...parsed, phase: "error", error: { code: "REQUEST_ABORTED", message: "页面刷新，请求已中断", retryable: true }, savedAt: parsed.savedAt }
-                  : parsed;
-              setTimelineCache(restored);
+              // Pending requests can't survive a full refresh — silently discard
+              if (parsed.phase !== "pending") {
+                setTimelineCache(parsed);
+              }
             }
           }
         } catch { /* ignore malformed cache */ }

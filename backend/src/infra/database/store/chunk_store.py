@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
 
+from ....domain.schemas.chunk import ChunkRow, SummaryRow, HybridSearchResult, ChunkStoreStats
+
 logger = logging.getLogger(__name__)
 
 
@@ -209,7 +211,7 @@ class ChunkStore:
         top_k: int = 6,
         vec_weight: float = 0.7,
         threshold: float = 0.5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[HybridSearchResult]:
         """
         混合检索：向量相似度（70%）+ BM25 关键词匹配（30%）
 
@@ -316,12 +318,12 @@ class ChunkStore:
             row = rows.get(sid)
             if row:
                 results.append(
-                    {
-                        "chunk_text": row["chunk_text"],
-                        "summary_text": row["summary_text"],
-                        "score": score,
-                        "chunk_id": str(row["chunk_id"]),
-                    }
+                    HybridSearchResult(
+                        chunk_text=row["chunk_text"],
+                        summary_text=row["summary_text"],
+                        score=score,
+                        chunk_id=row["chunk_id"],
+                    )
                 )
 
         return results
@@ -330,7 +332,20 @@ class ChunkStore:
         """关闭数据库连接（close at end of file）"""
         pass  # real close is at bottom
 
-    def get_chunk_by_source_and_index(self, chunk_source: str, chunk_index: int) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _row_to_chunk(row: sqlite3.Row) -> ChunkRow:
+        """Convert a sqlite3.Row to ChunkRow dataclass."""
+        d = dict(row)
+        return ChunkRow(
+            chunk_id=d["chunk_id"],
+            chunk_text=d["chunk_text"],
+            chunk_index=d["chunk_index"],
+            chunk_source=d.get("chunk_source"),
+            created_at=str(d.get("created_at", "")),
+            is_structured=bool(d.get("is_structured", False)),
+        )
+
+    def get_chunk_by_source_and_index(self, chunk_source: str, chunk_index: int) -> ChunkRow | None:
         """
         根据来源文件名和索引查找chunk
         
@@ -353,11 +368,11 @@ class ChunkStore:
         """, (chunk_source, chunk_index))
         
         row = cursor.fetchone()
-        
+
         if row:
-            return dict(row)
+            return self._row_to_chunk(row)
         return None
-    
+
     def save_chunk(
         self, 
         chunk_text: str, 
@@ -410,7 +425,7 @@ class ChunkStore:
         existing_chunk = self.get_chunk_by_source_and_index(chunk_source, chunk_index)
         
         if existing_chunk:
-            chunk_id = existing_chunk['chunk_id']
+            chunk_id = existing_chunk.chunk_id
             logger.debug(f"复用已有chunk: chunk_id={chunk_id}, index={chunk_index}, source={chunk_source}")
             return chunk_id, False
         else:
@@ -494,7 +509,7 @@ class ChunkStore:
         self.conn.commit()
         logger.info(f"批量更新向量ID: {len(mapping)}条记录")
     
-    def get_chunk(self, chunk_id: int) -> Optional[Dict[str, Any]]:
+    def get_chunk(self, chunk_id: int) -> ChunkRow | None:
         """
         获取chunk
         
@@ -512,11 +527,11 @@ class ChunkStore:
         """, (chunk_id,))
         
         row = cursor.fetchone()
-        
+
         if row:
-            return dict(row)
+            return self._row_to_chunk(row)
         return None
-    
+
     def get_chunks_batch(self, chunk_ids: List[int]) -> Dict[int, str]:
         """
         批量获取chunk文本
@@ -549,29 +564,35 @@ class ChunkStore:
         
         return chunk_map
     
-    def get_summaries_by_chunk(self, chunk_id: int) -> List[Dict[str, Any]]:
+    def get_summaries_by_chunk(self, chunk_id: int) -> list[SummaryRow]:
         """
         获取chunk的所有摘要
-        
+
         Args:
             chunk_id: chunk ID
-            
+
         Returns:
-            摘要列表
+            SummaryRow 列表
         """
         cursor = self.conn.cursor()
-        
+
         cursor.execute("""
-            SELECT * FROM summaries 
+            SELECT * FROM summaries
             WHERE chunk_id = ?
             ORDER BY summary_id
         """, (chunk_id,))
-        
-        rows = cursor.fetchall()
-        
-        return [dict(row) for row in rows]
-    
-    def get_chunk_by_vector_id(self, vector_id: str) -> Optional[Dict[str, Any]]:
+
+        return [
+            SummaryRow(
+                summary_id=row["summary_id"],
+                chunk_id=row["chunk_id"],
+                summary_text=row["summary_text"],
+                created_at=str(row["created_at"]),
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def get_chunk_by_vector_id(self, vector_id: str) -> ChunkRow | None:
         """
         通过向量ID获取原始chunk
         
@@ -592,12 +613,12 @@ class ChunkStore:
         """, (vector_id,))
         
         row = cursor.fetchone()
-        
+
         if row:
-            return dict(row)
+            return self._row_to_chunk(row)
         return None
-    
-    def get_random_chunks(self, count: int) -> List[Dict[str, Any]]:
+
+    def get_random_chunks(self, count: int) -> list[ChunkRow]:
         """
         从chunks表中随机选取指定数量的chunks
         
@@ -616,10 +637,10 @@ class ChunkStore:
         """, (count,))
         
         rows = cursor.fetchall()
-        chunks = [dict(row) for row in rows]
-        
+        chunks = [self._row_to_chunk(row) for row in rows]
+
         logger.debug(f"随机选取chunks: 请求数量={count}, 实际返回={len(chunks)}")
-        
+
         return chunks
     
     def get_random_summaries(self, count: int) -> List[str]:
@@ -647,7 +668,7 @@ class ChunkStore:
         
         return summaries
     
-    def get_all_chunks_with_status(self) -> List[Dict[str, Any]]:
+    def get_all_chunks_with_status(self) -> list[ChunkRow]:
         """
         返回所有 chunks，附带 is_structured 标记。
 
@@ -669,9 +690,9 @@ class ChunkStore:
             ORDER BY c.created_at DESC
         """)
         rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [self._row_to_chunk(row) for row in rows]
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> ChunkStoreStats:
         """
         获取存储统计信息
         
@@ -689,11 +710,11 @@ class ChunkStore:
         cursor.execute("SELECT COUNT(*) FROM summaries WHERE vector_id IS NOT NULL")
         vectorized_count = cursor.fetchone()[0]
         
-        return {
-            "chunks": chunk_count,
-            "summaries": summary_count,
-            "vectorized": vectorized_count
-        }
+        return ChunkStoreStats(
+            chunks=chunk_count,
+            summaries=summary_count,
+            vectorized=vectorized_count,
+        )
     
     def delete_chunks_by_source(self, chunk_source: str) -> int:
         """删除指定来源的所有 chunk 及其关联 summaries，返回删除的 chunk 数"""

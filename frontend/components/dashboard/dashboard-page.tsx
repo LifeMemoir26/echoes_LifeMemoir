@@ -7,6 +7,8 @@ import { motion } from "framer-motion";
 import { BookOpen, CalendarDays, Library, MessageSquare, Upload } from "lucide-react";
 import { UploadMaterialModal } from "@/components/knowledge/upload-material-modal";
 import { useWorkspaceContext } from "@/lib/workspace/context";
+import { MagneticHover } from "@/components/ui/magnetic-hover";
+import { softSpring, smooth } from "@/lib/motion/spring";
 
 const FEATURE_CARDS = [
   {
@@ -47,7 +49,7 @@ export function DashboardPage() {
           className="mb-8"
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
+          transition={smooth}
         >
           <h1 className="font-[var(--font-heading)] text-3xl text-slate-900">
             欢迎回来{username ? `，${username}` : ""}
@@ -63,33 +65,35 @@ export function DashboardPage() {
                 className="relative"
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.35, delay: 0.1 + index * 0.06 }}
+                transition={{ ...softSpring, delay: 0.08 + index * 0.06 }}
               >
-                <Link
-                  href={href as Route}
-                  className="group block cursor-pointer rounded-2xl border border-black/[0.06] bg-white/80 p-8 backdrop-blur-sm transition duration-200 hover:border-[#C4A882]"
-                >
-                  <div className="mb-4 inline-flex rounded-xl bg-[#F5EDE4] p-3">
-                    <Icon className="h-6 w-6 text-[#A2845E]" aria-hidden="true" />
-                  </div>
-                  <h2 className="font-[var(--font-heading)] text-2xl text-slate-900">{title}</h2>
-                  <p className="mt-1 text-sm text-slate-500">{description}</p>
-                  {isKnowledge && (
-                    <div className="mt-4">
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setUploadModalOpen(true);
-                        }}
-                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#C4A882]/40 bg-[#F5EDE4] px-3 py-1.5 text-xs text-[#A2845E] transition hover:border-[#A2845E]"
-                      >
-                        <Upload className="h-3 w-3" />
-                        上传资料 +
-                      </button>
+                <MagneticHover>
+                  <Link
+                    href={href as Route}
+                    className="group block cursor-pointer rounded-2xl border border-black/[0.06] bg-white/80 p-8 backdrop-blur-[15px] backdrop-saturate-[1.8] shadow-[var(--shadow-card)] transition-all duration-200 hover:shadow-[var(--shadow-card-hover)] hover:border-[#C4A882] hover:-translate-y-px"
+                  >
+                    <div className="mb-4 inline-flex rounded-xl bg-[#F5EDE4] p-3 transition-transform duration-200 group-hover:scale-110">
+                      <Icon className="h-6 w-6 text-[#A2845E]" aria-hidden="true" />
                     </div>
-                  )}
-                </Link>
+                    <h2 className="font-[var(--font-heading)] text-2xl text-slate-900">{title}</h2>
+                    <p className="mt-1 text-sm text-slate-500">{description}</p>
+                    {isKnowledge && (
+                      <div className="mt-4">
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setUploadModalOpen(true);
+                          }}
+                          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#C4A882]/40 bg-[#F5EDE4] px-3 py-1.5 text-xs text-[#A2845E] transition hover:border-[#A2845E]"
+                        >
+                          <Upload className="h-3 w-3" />
+                          上传资料 +
+                        </button>
+                      </div>
+                    )}
+                  </Link>
+                </MagneticHover>
               </motion.div>
             );
           })}

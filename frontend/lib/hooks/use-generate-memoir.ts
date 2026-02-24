@@ -1,15 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery } from "@tanstack/react-query";
 import { ApiRequestError } from "@/lib/api/client";
 import { generateMemoir, getSavedMemoir } from "@/lib/api/memoir";
 import type { MemoirGenerateData, MemoirGenerateRequest, NormalizedApiError } from "@/lib/api/types";
-
-export type GenerateState = {
-  data: MemoirGenerateData | null;
-  error: NormalizedApiError | null;
-};
 
 export function useGenerateMemoir() {
   const [generatedData, setGeneratedData] = useState<MemoirGenerateData | null>(null);
@@ -22,12 +17,31 @@ export function useGenerateMemoir() {
   });
 
   const mutation = useMutation<MemoirGenerateData, Error, MemoirGenerateRequest>({
+    mutationKey: ["generate-memoir"],
     mutationFn: generateMemoir,
     retry: false,
     onSuccess: (result) => {
       setGeneratedData(result);
     },
   });
+
+  // ── Survive navigation: observe global MutationCache ──────────────────────
+  const globalPending = useMutationState({
+    filters: { mutationKey: ["generate-memoir"], status: "pending" },
+    select: () => true as const,
+  });
+  const globalSuccessData = useMutationState({
+    filters: { mutationKey: ["generate-memoir"], status: "success" },
+    select: (m) => m.state.data as MemoirGenerateData | undefined,
+  });
+
+  const isGloballyPending = globalPending.length > 0;
+  const isPending = mutation.isPending || isGloballyPending;
+
+  // Pick up data from a mutation that completed while we were on another page
+  const cachedMutationData = globalSuccessData.length > 0
+    ? globalSuccessData[globalSuccessData.length - 1] ?? null
+    : null;
 
   const normalizedError: NormalizedApiError | null =
     mutation.error instanceof ApiRequestError
@@ -42,11 +56,12 @@ export function useGenerateMemoir() {
           }
         : null;
 
-  // Use mutation result if available, otherwise fall back to saved data
-  const data = generatedData ?? mutation.data ?? (savedQuery.data ?? null);
+  // Use mutation result if available, otherwise fall back to global cache, then saved data
+  const data = generatedData ?? mutation.data ?? cachedMutationData ?? (savedQuery.data ?? null);
 
   return {
     ...mutation,
+    isPending,
     data,
     normalizedError,
     canRetry: Boolean(normalizedError?.retryable)

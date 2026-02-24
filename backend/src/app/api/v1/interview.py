@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any
@@ -14,7 +14,6 @@ from fastapi.responses import StreamingResponse
 from src.application.interview.session import (
     add_dialogue_streaming,
     create_interview_session,
-    flush_dialogue_streaming,
     reset_interview_session,
     _bootstrap_pending_events,
     _bootstrap_supplements_bg,
@@ -26,19 +25,14 @@ from .deps import get_current_username
 from .errors import build_error, error_response
 from .models import ApiResponse, SessionActionData, SessionCreateData, SessionCreateRequest, SessionMessageRequest
 from .session_registry import SessionEvent, registry
+from .sse_utils import encode_sse, iso_now
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
 HEARTBEAT_SECONDS = 15
 IDLE_TIMEOUT_SECONDS = 300
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _encode_sse(event_id: int, event: str, payload: dict[str, Any]) -> str:
-    return f"id: {event_id}\nevent: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 async def _n_round_refresh_bg(
@@ -77,7 +71,7 @@ async def _n_round_refresh_bg(
                     similarity_threshold=0.5,
                 )
             except Exception as vec_exc:
-                pass  # vector store optional; proceed without
+                logger.debug("Vector store query failed (optional): %s", vec_exc)
 
         pending_events = await storage.get_all_pending_events()
 
@@ -115,14 +109,14 @@ async def _n_round_refresh_bg(
                         "trace_id": trace_id,
                         "partial": "pending_events",
                         "pending_events": pending_summary,
-                        "at": _iso_now(),
+                        "at": iso_now(),
                     },
                 )
             except Exception as exc:
                 await registry.publish(
                     session_id, "error",
                     {"error_code": "REFRESH_ENRICH_FAILED", "error_message": str(exc),
-                     "retryable": False, "trace_id": trace_id, "at": _iso_now()},
+                     "retryable": False, "trace_id": trace_id, "at": iso_now()},
                 )
 
         async def _supplements_task() -> None:
@@ -141,14 +135,14 @@ async def _n_round_refresh_bg(
                         "trace_id": trace_id,
                         "partial": "supplements",
                         "event_supplements": [s.model_dump() for s in result.supplements],
-                        "at": _iso_now(),
+                        "at": iso_now(),
                     },
                 )
             except Exception as exc:
                 await registry.publish(
                     session_id, "error",
                     {"error_code": "REFRESH_SUPPLEMENTS_FAILED", "error_message": str(exc),
-                     "retryable": False, "trace_id": trace_id, "at": _iso_now()},
+                     "retryable": False, "trace_id": trace_id, "at": iso_now()},
                 )
 
         async def _anchors_task() -> None:
@@ -168,14 +162,14 @@ async def _n_round_refresh_bg(
                         "partial": "anchors",
                         "positive_triggers": result.positive_triggers,
                         "sensitive_topics": result.sensitive_topics,
-                        "at": _iso_now(),
+                        "at": iso_now(),
                     },
                 )
             except Exception as exc:
                 await registry.publish(
                     session_id, "error",
                     {"error_code": "REFRESH_ANCHORS_FAILED", "error_message": str(exc),
-                     "retryable": False, "trace_id": trace_id, "at": _iso_now()},
+                     "retryable": False, "trace_id": trace_id, "at": iso_now()},
                 )
 
         await asyncio.gather(
@@ -189,7 +183,7 @@ async def _n_round_refresh_bg(
         await registry.publish(
             session_id, "error",
             {"error_code": "REFRESH_FAILED", "error_message": str(exc),
-             "retryable": False, "trace_id": trace_id, "at": _iso_now()},
+             "retryable": False, "trace_id": trace_id, "at": iso_now()},
         )
 
 
@@ -200,7 +194,6 @@ async def _process_message_bg(
     trace_id: str,
 ) -> None:
     """Background coroutine that drives add_dialogue_streaming and publishes SSE events."""
-    completed = False
     try:
         async for update in add_dialogue_streaming(
             record.interview_session,
@@ -220,7 +213,7 @@ async def _process_message_bg(
                         "error_message": first.get("error_message", "Workflow failed"),
                         "retryable": first.get("retryable", False),
                         "trace_id": trace_id,
-                        "at": _iso_now(),
+                        "at": iso_now(),
                     },
                 )
                 return
@@ -229,24 +222,16 @@ async def _process_message_bg(
             if "ingest" in update:
                 storage = record.interview_session.runtime.storage
                 config = get_settings().interview
-                # 12.2: n 轮刷新检查
+                # n 轮刷新检查
                 if storage.dialogue_count > 0 and storage.dialogue_count % config.n_refresh_interval == 0:
                     asyncio.create_task(_n_round_refresh_bg(record, session_id, trace_id))
-                # 12.3: TmpStorage mark-and-drain 摘要触发
+                # TmpStorage mark-and-drain 摘要触发
                 storage.trigger_summary_update_if_ready(
                     session_id,
                     registry,
                     trace_id,
                     record.interview_session.runtime.summary_processor,
                 )
-
-            if "push_summary" in update:
-                await registry.publish(
-                    session_id,
-                    "completed",
-                    {"trace_id": trace_id, "status": "message_processed", "at": _iso_now()},
-                )
-                completed = True
 
     except Exception as exc:
         error = build_error(
@@ -263,17 +248,15 @@ async def _process_message_bg(
                 "error_message": error.error_message,
                 "retryable": error.retryable,
                 "trace_id": error.trace_id,
-                "at": _iso_now(),
+                "at": iso_now(),
             },
         )
     finally:
-        if not completed:
-            # buffered branch: split_or_buffer → __end__ without push_summary
-            await registry.publish(
-                session_id,
-                "completed",
-                {"trace_id": trace_id, "status": "message_processed", "at": _iso_now()},
-            )
+        await registry.publish(
+            session_id,
+            "completed",
+            {"trace_id": trace_id, "status": "message_processed", "at": iso_now()},
+        )
 
 
 async def _process_flush_bg(
@@ -281,35 +264,9 @@ async def _process_flush_bg(
     session_id: str,
     trace_id: str,
 ) -> None:
-    """Background coroutine that drives flush_dialogue_streaming and publishes SSE events."""
-    completed = False
+    """Background coroutine that triggers mark-and-drain summary via flush_buffer."""
     try:
-        async for update in flush_dialogue_streaming(record.interview_session):
-            if "__error__" in update:
-                error_data = update["__error__"]
-                errors = error_data.get("errors", [{}])
-                first = errors[0] if errors else {}
-                await registry.publish(
-                    session_id,
-                    "error",
-                    {
-                        "error_code": first.get("error_code", "WORKFLOW_ERROR"),
-                        "error_message": first.get("error_message", "Flush workflow failed"),
-                        "retryable": first.get("retryable", False),
-                        "trace_id": trace_id,
-                        "at": _iso_now(),
-                    },
-                )
-                return
-
-            if "push_summary" in update:
-                await registry.publish(
-                    session_id,
-                    "completed",
-                    {"trace_id": trace_id, "status": "flush_completed", "at": _iso_now()},
-                )
-                completed = True
-
+        await record.interview_session.flush_buffer()
     except Exception as exc:
         error = build_error(
             error_code="INTERVIEW_FLUSH_FAILED",
@@ -325,16 +282,15 @@ async def _process_flush_bg(
                 "error_message": error.error_message,
                 "retryable": error.retryable,
                 "trace_id": error.trace_id,
-                "at": _iso_now(),
+                "at": iso_now(),
             },
         )
     finally:
-        if not completed:
-            await registry.publish(
-                session_id,
-                "completed",
-                {"trace_id": trace_id, "status": "flush_completed", "at": _iso_now()},
-            )
+        await registry.publish(
+            session_id,
+            "completed",
+            {"trace_id": trace_id, "status": "flush_completed", "at": iso_now()},
+        )
 
 
 @router.post("/session/create", response_model=ApiResponse[SessionCreateData])
@@ -440,8 +396,8 @@ async def create_session(
     async def _run_bootstrap() -> None:
         await asyncio.gather(
             _bootstrap_pending_events(interview_session, record.session_id, _bs_trace),
-            _bootstrap_supplements_bg(interview_session, record.session_id, registry, _bs_trace),
-            _bootstrap_anchors_bg(interview_session, record.session_id, registry, _bs_trace),
+            _bootstrap_supplements_bg(interview_session, record.session_id, _bs_trace),
+            _bootstrap_anchors_bg(interview_session, record.session_id, _bs_trace),
             return_exceptions=True,
         )
 
@@ -488,7 +444,7 @@ async def send_message(
             "trace_id": trace_id,
             "status": "processing",
             "speaker": payload.speaker,
-            "at": _iso_now(),
+            "at": iso_now(),
         },
     )
     asyncio.create_task(_process_message_bg(record, session_id, payload, trace_id))
@@ -530,7 +486,7 @@ async def flush_session(
     await registry.publish(
         session_id,
         "status",
-        {"trace_id": trace_id, "status": "flushing", "at": _iso_now()},
+        {"trace_id": trace_id, "status": "flushing", "at": iso_now()},
     )
     asyncio.create_task(_process_flush_bg(record, session_id, trace_id))
 
@@ -542,6 +498,70 @@ async def flush_session(
             status="accepted",
             trace_id=trace_id,
             details={"queued": True},
+        ),
+    )
+
+
+@router.patch("/session/{session_id}/pending-event/{event_id}/priority", response_model=ApiResponse[SessionActionData])
+async def toggle_pending_event_priority(
+    session_id: str,
+    event_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[SessionActionData]:
+    """Toggle a pending event's priority flag and re-sort the list."""
+    record = await registry.get(session_id)
+    if record is None or not record.active:
+        raise error_response(
+            status_code=404,
+            error_code="SESSION_NOT_FOUND",
+            error_message="session does not exist or has expired",
+            trace_id=f"session-{session_id}",
+        )
+    if current_username != record.username:
+        raise error_response(
+            status_code=403,
+            error_code="FORBIDDEN_USERNAME",
+            error_message="token username does not match session owner",
+            trace_id=f"session-{session_id}",
+        )
+
+    isession = record.interview_session
+    storage = isession.runtime.storage
+
+    event = await storage.get_pending_event(event_id)
+    if event is None:
+        raise error_response(
+            status_code=404,
+            error_code="EVENT_NOT_FOUND",
+            error_message=f"pending event {event_id} not found",
+            trace_id=f"session-{session_id}",
+        )
+
+    new_priority = not event.is_priority
+    await storage.set_pending_event_priority(event_id, new_priority)
+    await storage.reorder_pending_events()
+
+    # Push updated list via SSE so all connected clients reflect the change
+    pending_summary = await isession.get_pending_events_summary()
+    await registry.publish(
+        session_id,
+        "context",
+        {
+            "trace_id": record.thread_id,
+            "partial": "pending_events",
+            "pending_events": pending_summary,
+            "at": iso_now(),
+        },
+    )
+
+    return ApiResponse(
+        status="success",
+        data=SessionActionData(
+            session_id=session_id,
+            thread_id=record.thread_id,
+            status="priority_toggled",
+            trace_id=record.thread_id,
+            details={"event_id": event_id, "is_priority": new_priority},
         ),
     )
 
@@ -570,12 +590,12 @@ async def close_session(
     try:
         await reset_interview_session(record.interview_session)
     except Exception:
-        pass
+        logger.warning("Failed to reset interview session %s", session_id, exc_info=True)
 
     await registry.publish(
         session_id,
         "completed",
-        {"trace_id": record.thread_id, "status": "session_closed", "at": _iso_now()},
+        {"trace_id": record.thread_id, "status": "session_closed", "at": iso_now()},
     )
     return ApiResponse(
         status="success",
@@ -628,10 +648,10 @@ async def stream_events(
         connected_payload = {
             "trace_id": record.thread_id,
             "session_id": session_id,
-            "connected_at": _iso_now(),
+            "connected_at": iso_now(),
             "resumed": resume_from is not None,
         }
-        yield _encode_sse(0, "connected", connected_payload)
+        yield encode_sse("connected", connected_payload, event_id=0)
 
         # Always push current in-memory state so panels populate immediately
         # (covers both reconnect and recover-from-conflict scenarios)
@@ -646,23 +666,23 @@ async def stream_events(
                 "positive_triggers": suggestions.positive_triggers if suggestions else [],
                 "sensitive_topics": suggestions.sensitive_topics if suggestions else [],
                 "pending_events": pending,
-                "at": _iso_now(),
+                "at": iso_now(),
             }
-            yield _encode_sse(0, "context", snapshot)
+            yield encode_sse("context", snapshot, event_id=0)
         except Exception:
-            pass  # snapshot is best-effort; stream continues regardless
+            logger.debug("SSE snapshot failed for session %s (best-effort)", session_id, exc_info=True)
 
         try:
             while True:
                 try:
                     evt: SessionEvent = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SECONDS)
-                    yield _encode_sse(
-                        evt.event_id,
+                    yield encode_sse(
                         evt.event,
                         {
                             "session_id": session_id,
                             **evt.payload,
                         },
+                        event_id=evt.event_id,
                     )
                     if evt.event == "completed" and isinstance(evt.payload, dict):
                         status = str(evt.payload.get("status", ""))
@@ -681,19 +701,19 @@ async def stream_events(
                                 "trace_id": latest.thread_id,
                                 "status": "idle_timeout",
                                 "idle_seconds": int(idle_for),
-                                "at": _iso_now(),
+                                "at": iso_now(),
                             },
                         )
                         continue
 
-                    yield _encode_sse(
-                        -1,
+                    yield encode_sse(
                         "heartbeat",
                         {
                             "session_id": session_id,
                             "trace_id": latest.thread_id,
-                            "at": _iso_now(),
+                            "at": iso_now(),
                         },
+                        event_id=-1,
                     )
         finally:
             await registry.unsubscribe(session_id, queue)

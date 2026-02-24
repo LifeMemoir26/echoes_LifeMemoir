@@ -3,11 +3,11 @@
 负责在采访开始前初始化待探索事件列表
 """
 import logging
-from typing import List
+from typing import List, Optional
 import random
 
-from src.application.contracts.llm import LLMGatewayProtocol
-from src.infra.database import SQLiteClient, VectorStore, ChunkStore
+from ...contracts.llm import LLMGatewayProtocol
+from ....infra.database import SQLiteClient, VectorStore, ChunkStore
 from ....core.config import InterviewAssistanceConfig, get_settings
 from ....domain.schemas.interview import PendingEventCandidate
 
@@ -29,7 +29,8 @@ class PendingEventInitializer:
         llm_gateway: LLMGatewayProtocol,
         sqlite_client: SQLiteClient,
         vector_store: VectorStore,
-        config: InterviewAssistanceConfig = None
+        config: InterviewAssistanceConfig = None,
+        model: Optional[str] = None,
     ):
         """
         初始化待探索事件初始化器
@@ -53,7 +54,8 @@ class PendingEventInitializer:
         if config is None:
             config = get_settings().interview
         self.config = config
-        
+        self.model = model
+
         logger.info("PendingEventInitializer initialized")
     
     async def initialize_pending_events(self) -> List[PendingEventCandidate]:
@@ -120,7 +122,7 @@ class PendingEventInitializer:
             logger.info(f"数据库中共有 {len(all_events)} 个事件")
             
             # 提取事件摘要
-            event_summaries = [event.get('event_summary', '') for event in all_events]
+            event_summaries = [event.event_summary for event in all_events]
             event_summaries = [s for s in event_summaries if s]  # 过滤空摘要
             
             if not event_summaries:
@@ -129,9 +131,9 @@ class PendingEventInitializer:
             
             # 创建摘要到事件的映射（用于后续获取详细信息）
             summary_to_event = {
-                event.get('event_summary', ''): event 
-                for event in all_events 
-                if event.get('event_summary', '')
+                event.event_summary: event
+                for event in all_events
+                if event.event_summary
             }
             
             # 使用 query_relevant_chunks 批量查询所有事件与chunks的相似度
@@ -165,7 +167,7 @@ class PendingEventInitializer:
                 # 从映射中获取完整事件信息
                 event = summary_to_event.get(query_summary)
                 if event:
-                    event_details = event.get('event_details', '无详细描述')
+                    event_details = event.event_details or '无详细描述'
                     candidate_info_list.append({
                         "summary": query_summary,
                         "details": event_details,
@@ -283,7 +285,7 @@ class PendingEventInitializer:
             result = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                model=None,
+                model=self.model,
                 temperature=0.3  # 较低温度保证准确性
             )
             
@@ -454,7 +456,7 @@ class PendingEventInitializer:
             result = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                model=None,
+                model=self.model,
                 temperature=0.4  # 适中的温度，保持创造性但不失准确性
             )
             

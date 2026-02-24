@@ -6,6 +6,7 @@ import { useInterviewEvents } from "@/lib/hooks/use-interview-events";
 import { useInterviewSession } from "@/lib/hooks/use-interview-session";
 import { useWorkspaceContext } from "@/lib/workspace/context";
 import type { EventSupplementItem, PendingEventDetail } from "@/lib/api/types";
+import { togglePendingEventPriority } from "@/lib/api/interview";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -33,7 +34,7 @@ function mergeConsecutiveMessages(msgs: Message[]): Array<{ role: SpeakerRole; c
 }
 
 export function InterviewPage() {
-  const { session, state, error, canSubmitCommand, create, send, flush, close, syncFromServerEvent, recoverableSessionId, recoverFromConflict } =
+  const { session, state, error, canSubmitCommand, create, forceCreate, send, flush, close, syncFromServerEvent, recoverableSessionId, recoverFromConflict } =
     useInterviewSession();
 
   const { username, activeSessionId, interviewMessagesCache, setInterviewMessagesCache } = useWorkspaceContext();
@@ -179,6 +180,11 @@ export function InterviewPage() {
     await create(username);
   }, [create, username]);
 
+  const handleForceCreate = useCallback(async () => {
+    if (!username) return;
+    await forceCreate(username);
+  }, [forceCreate, username]);
+
   const handleToggle = useCallback((id: string) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
@@ -187,6 +193,21 @@ export function InterviewPage() {
       return next;
     });
   }, []);
+
+  const handleTogglePriority = useCallback(
+    (eventId: string) => {
+      if (!session?.session_id) return;
+      // Optimistic: flip locally for instant feedback
+      setPendingEvents((prev) =>
+        prev.map((e) => (e.id === eventId ? { ...e, is_priority: !e.is_priority } : e)),
+      );
+      // Fire-and-forget; SSE will push the authoritative list
+      togglePendingEventPriority(session.session_id, eventId).catch(() => {
+        // Revert on failure — SSE will correct eventually anyway
+      });
+    },
+    [session?.session_id],
+  );
 
   const statusLabel = isProcessing
     ? { status: "loading" as const, text: "处理中" }
@@ -208,7 +229,7 @@ export function InterviewPage() {
       className="flex h-full flex-col overflow-hidden"
     >
       {/* Status bar */}
-      <div className="shrink-0 flex items-center justify-end gap-2 px-6 py-3 border-b border-black/[0.06] bg-white/80 backdrop-blur-sm">
+      <div className="shrink-0 flex items-center justify-end gap-2 px-6 py-3 border-b border-[#A2845E]/[0.06] bg-[var(--glass-default)] backdrop-blur-[15px] backdrop-saturate-[1.8]">
         {sseLabel && <StatusBadge status={sseLabel.status} label={sseLabel.text} />}
         <StatusBadge status={statusLabel.status} label={statusLabel.text} />
       </div>
@@ -267,7 +288,7 @@ export function InterviewPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => void handleCreate()}
+                    onClick={() => void handleForceCreate()}
                     className="text-slate-500"
                   >
                     重新创建会话
@@ -283,9 +304,6 @@ export function InterviewPage() {
                   {error && (
                     <p className="text-center text-xs text-rose-600">{error.message}</p>
                   )}
-                  <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    {username || "—"}
-                  </div>
                   <Button
                     onClick={() => void handleCreate()}
                     disabled={!username}
@@ -307,7 +325,7 @@ export function InterviewPage() {
           {isConnected && (
             <>
               {/* Message list — consecutive same-speaker messages are merged */}
-              <div className="flex-1 overflow-y-auto space-y-3 px-4 py-4">
+              <div className="flex-1 overflow-y-auto mask-fade-both space-y-3 px-4 py-4">
                 {mergedMessages.length === 0 && (
                   <p className="pt-8 text-center text-xs text-slate-400">
                     点击录音按钮开始采访
@@ -381,7 +399,7 @@ export function InterviewPage() {
             {isConnected && !pendingEventsLoaded ? (
               <div className="flex h-full items-center justify-center text-xs text-slate-400">加载中…</div>
             ) : (
-              <PendingEventsPanel events={pendingEvents} expandedIds={expandedIds} onToggle={handleToggle} />
+              <PendingEventsPanel events={pendingEvents} expandedIds={expandedIds} onToggle={handleToggle} onTogglePriority={handleTogglePriority} />
             )}
           </Card>
 

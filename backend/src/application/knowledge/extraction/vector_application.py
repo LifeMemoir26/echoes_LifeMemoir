@@ -5,13 +5,14 @@
 
 import logging
 import gc
+from dataclasses import asdict
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from src.infra.utils.text_splitter import TextSplitter, SplitterMode
-from src.infra.database import AliasStore, ChunkStore, VectorStore
+from ....infra.utils.text_splitter import TextSplitter, SplitterMode
+from ....infra.database import AliasStore, ChunkStore, VectorStore
 from .extractor.event_summary_extractor import EventSummaryExtractor
-from src.application.contracts.llm import LLMGatewayProtocol
+from ...contracts.llm import LLMGatewayProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ class VectorApplication:
             "summaries_count": total_summaries,
             "vectors_count": vector_count_result["count"],
             "aliases_count": len(aliases),
-            "chunk_store_stats": self.chunk_store.get_stats()
+            "chunk_store_stats": asdict(self.chunk_store.get_stats())
         }
         
         logger.info(f"向量数据库构建完成: {stats}")
@@ -340,8 +341,8 @@ class VectorApplication:
             enriched_results.append({
                 "summary": result["document"],
                 "score": result["score"],
-                "chunk_text": chunk["chunk_text"] if chunk else None,
-                "chunk_id": chunk["chunk_id"] if chunk else None,
+                "chunk_text": chunk.chunk_text if chunk else None,
+                "chunk_id": chunk.chunk_id if chunk else None,
                 "metadata": result["metadata"]
             })
         
@@ -356,7 +357,7 @@ async def test_vector_pipeline():
     """测试向量Pipeline"""
     import asyncio
     from ....core.config import get_settings
-    from src.infra.llm.concurrency_manager import get_concurrency_manager
+    from ....infra.llm.concurrency_manager import get_concurrency_manager
     
     # 获取全局ConcurrencyManager
     concurrency_manager = get_concurrency_manager()

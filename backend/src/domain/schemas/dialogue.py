@@ -3,7 +3,6 @@
 """
 from typing import Optional
 from dataclasses import dataclass
-from pydantic import BaseModel, Field
 
 
 @dataclass
@@ -32,17 +31,3 @@ class TextChunk:
     
     def __str__(self) -> str:
         return f"TextChunk(dialogues={self.dialogue_count}, chars={self.total_chars})"
-
-
-class DialogueRequest(BaseModel):
-    """对话请求"""
-    username: str = Field(description="用户名")
-    speaker: str = Field(description="说话者")
-    content: str = Field(description="对话内容")
-
-
-class DialogueResponse(BaseModel):
-    """对话响应"""
-    success: bool = Field(description="是否成功")
-    context_generated: bool = Field(default=False, description="是否生成了背景信息")
-    message: Optional[str] = Field(default=None, description="提示信息")

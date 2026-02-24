@@ -19,7 +19,6 @@ def build_interview_storage_dependencies(*, username: str, data_base_dir: Path):
     embedding_cfg = settings.embedding
     embedder = GeminiEmbedder(
         api_keys=embedding_cfg.api_keys if embedding_cfg.api_keys else None,
-        api_key=embedding_cfg.gemini_api_key or None,
         model=embedding_cfg.model_name,
         batch_size=embedding_cfg.batch_size,
         proxy=embedding_cfg.proxy,

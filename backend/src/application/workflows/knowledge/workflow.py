@@ -62,7 +62,7 @@ class KnowledgeWorkflow(WorkflowBase):
     async def _node_extract(self, state: KnowledgeWorkflowState) -> dict[str, Any]:
         try:
             stage_start = time.time()
-            narrator = state.get("narrator_name") or state["username"]
+            narrator = state.get("narrator_name") or self.runtime.username
             kg_stats = await self.runtime.extraction_service.process_text(
                 state.get("text", ""),
                 narrator_name=narrator,
@@ -95,7 +95,7 @@ class KnowledgeWorkflow(WorkflowBase):
     async def _node_finalize(self, state: KnowledgeWorkflowState) -> dict[str, Any]:
         start_ts = state.get("metadata", {}).get("stage_start_ts", time.time())
         total_time = max(0.0, time.time() - float(start_ts))
-        username = state["username"]
+        username = self.runtime.username
         user_data_dir = self.runtime.data_base_dir / username
 
         metadata = dict(state.get("metadata", {}))
@@ -131,7 +131,7 @@ class KnowledgeWorkflow(WorkflowBase):
         exc: Exception,
         failed_node: str,
     ) -> dict[str, Any]:
-        trace_id = state.get("trace_id", state.get("thread_id", "unknown-trace"))
+        trace_id = "unknown"
         app_error = map_exception_to_app_error(exc, trace_id=trace_id, failed_node=failed_node)
         logger.error("Knowledge workflow node failed: %s", failed_node, exc_info=True)
         return {
@@ -139,6 +139,7 @@ class KnowledgeWorkflow(WorkflowBase):
             "failed_node": failed_node,
             "errors": [app_error.model_dump()],
         }
+
 
 
 async def run_knowledge_file(
@@ -156,16 +157,11 @@ async def run_knowledge_file(
     """Execute one knowledge file process via LangGraph workflow."""
 
     initial_state: KnowledgeWorkflowState = {
-        "workflow_id": workflow.workflow_id,
-        "thread_id": thread_id,
         "status": "received",
         "errors": [],
         "metadata": {},
-        "username": username,
         "file_path": str(file_path),
         "narrator_name": narrator_name or username,
-        "verbose": verbose,
-        "trace_id": thread_id,
         "material_type": material_type,
         "material_context": material_context,
     }
@@ -189,8 +185,7 @@ async def run_knowledge_file(
         "data_dir": result.get("data_dir", ""),
     }
 
-
-from collections.abc import AsyncIterator  # noqa: E402
+from collections.abc import AsyncIterator
 
 
 async def run_knowledge_file_stream(
@@ -205,7 +200,7 @@ async def run_knowledge_file_stream(
     material_context: str = "",
     material_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Stream knowledge workflow stage completions via LangGraph astream().
+    """Stream knowledge workflow stage completions via LangGraph astream_updates().
 
     Yields dicts of the form::
 
@@ -215,23 +210,18 @@ async def run_knowledge_file_stream(
     and publishing them to an SSE registry.
     """
     initial_state: KnowledgeWorkflowState = {
-        "workflow_id": workflow.workflow_id,
-        "thread_id": thread_id,
         "status": "received",
         "errors": [],
         "metadata": {},
-        "username": username,
         "file_path": str(file_path),
         "narrator_name": narrator_name or username,
-        "verbose": verbose,
-        "trace_id": thread_id,
         "material_type": material_type,
         "material_context": material_context,
     }
     if material_id:
         initial_state["material_id"] = material_id
 
-    # LangGraph astream() yields {node_name: output_state_delta} for each node
-    async for chunk in workflow.astream(initial_state, thread_id=thread_id):
+    # LangGraph astream_updates() yields {node_name: output_state_delta} for each node
+    async for chunk in workflow.astream_updates(initial_state, thread_id=thread_id):
         for node_name, output in chunk.items():
             yield {"node": node_name, "output": output}

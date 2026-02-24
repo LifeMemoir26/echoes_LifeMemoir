@@ -27,6 +27,7 @@ from src.infra.storage.material_store import MaterialStore
 
 from .deps import get_current_username
 from .errors import error_response, new_trace_id, normalize_workflow_failure
+from .sse_utils import encode_sse
 from .models import (
     ApiResponse,
     EventItem,
@@ -104,7 +105,7 @@ async def process_knowledge_upload(
 
     uploaded_at = datetime.now(timezone.utc)
     data_root = get_data_root()
-    target_dir = (data_root / safe_username / "metrials").resolve()
+    target_dir = (data_root / safe_username / "materials").resolve()
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
     except Exception as exc:
@@ -213,13 +214,13 @@ async def list_records(
     rows = store.get_all_chunks_with_status()
     records = [
         RecordItem(
-            chunk_id=row["chunk_id"],
-            chunk_source=row["chunk_source"],
-            preview=row["chunk_text"][:120],
-            total_chars=len(row["chunk_text"]),
-            chunk_index=row["chunk_index"],
-            created_at=str(row["created_at"]),
-            is_structured=bool(row["is_structured"]),
+            chunk_id=row.chunk_id,
+            chunk_source=row.chunk_source,
+            preview=row.chunk_text[:120],
+            total_chars=len(row.chunk_text),
+            chunk_index=row.chunk_index,
+            created_at=row.created_at,
+            is_structured=row.is_structured,
         )
         for row in rows
     ]
@@ -230,22 +231,21 @@ async def list_records(
 async def list_events(
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[EventsListData]:
-    import json as _json
     client = SQLiteClient(username=current_username)
     rows = client.get_all_events(sort_by_year=True)
     events = [
         EventItem(
-            id=row["id"],
-            year=row["year"],
-            time_detail=row.get("time_detail"),
-            event_summary=row["event_summary"],
-            event_details=row.get("event_details"),
-            is_merged=bool(row.get("is_merged", False)),
-            created_at=str(row["created_at"]),
-            life_stage=row.get("life_stage"),
-            event_category=_json.loads(row["event_category"]) if row.get("event_category") else [],
-            confidence=row.get("confidence"),
-            source_material_id=row.get("source_material_id"),
+            id=row.id,
+            year=row.year,
+            time_detail=row.time_detail,
+            event_summary=row.event_summary,
+            event_details=row.event_details,
+            is_merged=row.is_merged,
+            created_at=row.created_at or "",
+            life_stage=row.life_stage,
+            event_category=row.event_category,
+            confidence=row.confidence,
+            source_material_id=row.source_material_id,
         )
         for row in rows
     ]
@@ -259,8 +259,8 @@ async def get_profiles(
     client = SQLiteClient(username=current_username)
     profile = client.get_character_profile()
     data = ProfileData(
-        personality=profile.get("personality", "") if profile else "",
-        worldview=profile.get("worldview", "") if profile else "",
+        personality=profile.personality if profile else "",
+        worldview=profile.worldview if profile else "",
     )
     return ApiResponse(status="success", data=data)
 
@@ -276,12 +276,21 @@ async def upload_material(
     username: str = Form(...),
     display_name: str = Form(default=""),
     material_context: str = Form(default=""),
+    material_type: str = Form(default="document"),
     skip_processing: bool = Form(default=False),
     files: list[UploadFile] = File(...),
 ) -> ApiResponse[MaterialUploadData]:
     """批量上传文档材料并触发知识提取流程。"""
     trace_id = new_trace_id("upload-material")
     safe_username = _safe_username(username, trace_id)
+
+    if material_type not in ("interview", "document"):
+        raise error_response(
+            status_code=422,
+            error_code="INVALID_MATERIAL_TYPE",
+            error_message="material_type must be 'interview' or 'document'",
+            trace_id=trace_id,
+        )
 
     if current_username != safe_username:
         raise error_response(
@@ -329,12 +338,13 @@ async def upload_material(
                 username=safe_username,
                 filename=upload.filename,
                 content_bytes=content,
-                material_type="document",
+                material_type=material_type,
+                display_name=display_name,
             )
             db_client.insert_material(
                 material_id=material_id,
                 filename=upload.filename,
-                material_type="document",
+                material_type=material_type,
                 material_context=material_context,
                 file_path=rel_path,
                 file_size=len(content),
@@ -358,7 +368,7 @@ async def upload_material(
                     file_path=stored_path,
                     username=safe_username,
                     data_base_dir=data_root,
-                    material_type="document",
+                    material_type=material_type,
                     material_context=material_context,
                     material_id=material_id,
                 )
@@ -402,84 +412,12 @@ async def upload_material(
     )
 
 
-def _migrate_legacy_metrials(
-    db_client: SQLiteClient,
-    data_root: Path,
-    username: str,
-) -> None:
-    """扫描旧 metrials/ 目录，将没有 DB 记录的文件自动注册到 materials 表。
-
-    旧端点 /knowledge/process 将文件写到 metrials/（拼写有误），但不写 DB。
-    此函数在首次读取时自动将这些孤立文件补录入库，后续调用幂等。
-    优先从 uploads.jsonl 读取 original_filename 作为展示名。
-    """
-    legacy_dir = (data_root / username / "metrials").resolve()
-    if not legacy_dir.exists():
-        return
-
-    existing_rows = db_client.get_all_materials()
-    registered_paths = {row.get("file_path", "") for row in existing_rows}
-
-    # 从 uploads.jsonl 构建 stored_path → original_filename 映射
-    jsonl_meta: dict[str, dict] = {}
-    jsonl_path = legacy_dir / "uploads.jsonl"
-    if jsonl_path.exists():
-        for line in jsonl_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                key = entry.get("stored_path", "")
-                if key:
-                    jsonl_meta[key] = entry
-            except json.JSONDecodeError:
-                pass
-
-    _allowed = {".txt", ".md", ".markdown"}
-    for file_path in sorted(legacy_dir.iterdir()):
-        if not file_path.is_file():
-            continue
-        if file_path.suffix.lower() not in _allowed:
-            continue
-
-        rel_path = str(file_path.relative_to(data_root / username))
-        if rel_path in registered_paths:
-            continue
-
-        material_id = uuid.uuid4().hex[:8]
-        file_size = file_path.stat().st_size
-
-        # 优先用 uploads.jsonl 里的原始文件名作为展示名
-        meta = jsonl_meta.get(str(file_path.resolve()), {})
-        original_filename = meta.get("original_filename", file_path.name)
-        display_name = Path(original_filename).stem  # 去掉扩展名
-
-        db_client.insert_material(
-            material_id=material_id,
-            filename=file_path.name,
-            material_type="document",
-            file_path=rel_path,
-            file_size=file_size,
-            display_name=display_name,
-        )
-        db_client.update_material_status(
-            material_id=material_id,
-            status="done",
-        )
-        logger.info(f"Legacy metrials file registered: {rel_path} ({original_filename}) → {material_id}")
-
-
 @router.get("/knowledge/materials", response_model=ApiResponse[MaterialsListData])
 async def list_materials(
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[MaterialsListData]:
-    """返回当前用户的所有 materials 记录，同时将旧 metrials/ 目录中未注册的文件懒迁移入库。"""
-    data_root = get_data_root()
+    """返回当前用户的所有 materials 记录。"""
     db_client = SQLiteClient(username=current_username)
-
-    # 懒迁移：扫描旧 metrials/ 目录，将没有 DB 记录的文件自动注册
-    _migrate_legacy_metrials(db_client, data_root, current_username)
 
     rows = db_client.get_all_materials()
     materials = [
@@ -597,10 +535,6 @@ _STAGE_LABELS: dict[str, str] = {
 _SSE_HEARTBEAT_SECONDS = 15
 
 
-def _encode_sse(event: str, payload: dict[str, Any]) -> str:
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
 async def _reprocess_bg(
     material_id: str,
     file_path: Path,
@@ -681,7 +615,7 @@ async def _reprocess_bg(
             )
             db_client.update_material_status(material_id=material_id, status="failed")
         except Exception:
-            pass
+            logger.warning("Failed to publish error event for material %s", material_id, exc_info=True)
     finally:
         facade.close()
         await material_registry.cleanup(material_id)
@@ -783,13 +717,13 @@ async def stream_material_events(
     async def event_stream():
         queue = await material_registry.subscribe(material_id)
         try:
-            yield _encode_sse("connected", {"material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
+            yield encode_sse("connected", {"material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
 
             while True:
                 try:
                     msg = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
                 except asyncio.TimeoutError:
-                    yield _encode_sse("heartbeat", {"material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
+                    yield encode_sse("heartbeat", {"material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
                     continue
 
                 if msg is None:
@@ -798,7 +732,7 @@ async def stream_material_events(
 
                 event_name: str = msg.get("event", "status")
                 payload: dict[str, Any] = msg.get("payload", {})
-                yield _encode_sse(event_name, payload)
+                yield encode_sse(event_name, payload)
 
                 if event_name in ("completed", "error"):
                     break

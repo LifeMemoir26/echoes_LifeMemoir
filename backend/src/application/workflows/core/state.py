@@ -5,13 +5,25 @@ from __future__ import annotations
 from typing import Any, NotRequired, TypedDict
 
 
-class WorkflowState(TypedDict):
-    """Minimal required state for all workflows."""
+class WorkflowError(TypedDict):
+    """Serialized form of AppError in workflow state."""
 
-    workflow_id: str
-    thread_id: str
+    error_code: str
+    error_message: str
+    retryable: bool
+    failed_node: str | None
+    trace_id: str
+
+
+class WorkflowState(TypedDict):
+    """Minimal required state for all workflows.
+
+    Note: thread_id and workflow_id are NOT stored in state — they live in
+    LangGraph's config["configurable"] and are accessed via the RunnableConfig
+    passed to each node.
+    """
+
     status: str
-    errors: list[dict[str, Any]]
+    errors: list[WorkflowError]
     metadata: dict[str, Any]
-    trace_id: NotRequired[str]
     failed_node: NotRequired[str]

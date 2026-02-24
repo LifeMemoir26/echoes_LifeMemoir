@@ -62,7 +62,7 @@ class GenerateWorkflow(WorkflowBase):
             all_events = self.runtime.sqlite_client.get_all_events(sort_by_year=True)
             return {
                 "status": "data_loaded",
-                "all_events": all_events,
+                "all_events": [e.model_dump() for e in all_events],
             }
         except Exception as exc:
             return self._error_update(state, exc, "load_data")
@@ -95,10 +95,10 @@ class GenerateWorkflow(WorkflowBase):
 
             character_profile = self.runtime.sqlite_client.get_character_profile()
             random_chunks = self.runtime.chunk_store.get_random_chunks(count)
-            language_samples = [chunk["chunk_text"] for chunk in random_chunks]
+            language_samples = [chunk.chunk_text for chunk in random_chunks]
             return {
                 "status": "timeline_context_loaded",
-                "character_profile": character_profile,
+                "character_profile": character_profile.model_dump() if character_profile else None,
                 "language_samples": language_samples,
             }
         except Exception as exc:
@@ -143,7 +143,7 @@ class GenerateWorkflow(WorkflowBase):
                 count = self.runtime.config.memoir_language_sample_count
 
             random_chunks = self.runtime.chunk_store.get_random_chunks(count)
-            language_samples = [chunk["chunk_text"] for chunk in random_chunks]
+            language_samples = [chunk.chunk_text for chunk in random_chunks]
             return {
                 "status": "memoir_prepared",
                 "target_length": target_length,
@@ -186,7 +186,7 @@ class GenerateWorkflow(WorkflowBase):
         exc: Exception,
         failed_node: str,
     ) -> dict[str, Any]:
-        trace_id = state.get("trace_id", state.get("thread_id", "unknown-trace"))
+        trace_id = "unknown"
         app_error = map_exception_to_app_error(exc, trace_id=trace_id, failed_node=failed_node)
         logger.error("Generate workflow node failed: %s", failed_node, exc_info=True)
         return {
@@ -219,18 +219,14 @@ async def run_generate(
     """Execute one generate request via LangGraph workflow."""
 
     initial_state: GenerateWorkflowState = {
-        "workflow_id": workflow.workflow_id,
-        "thread_id": thread_id,
         "status": "received",
         "errors": [],
         "metadata": {},
-        "username": username,
         "mode": mode,
         "ratio": ratio,
         "target_length": target_length,
         "user_preferences": user_preferences,
         "language_sample_count": language_sample_count,
-        "trace_id": thread_id,
     }
     result = await workflow.ainvoke(initial_state, thread_id=thread_id)
     if result.get("status") == "failed":
@@ -242,7 +238,6 @@ async def run_generate(
         return {
             "timeline": timeline,
             "event_count": len(timeline),
-            "username": username,
             "generated_at": generated_at,
         }
 
@@ -250,7 +245,6 @@ async def run_generate(
     return {
         "memoir": memoir_text,
         "length": len(memoir_text) if memoir_text else 0,
-        "username": username,
         "generated_at": generated_at,
     }
 
@@ -280,7 +274,6 @@ def save_timeline_output(
     json_path.write_text(
         json.dumps(
             {
-                "username": username,
                 "generated_at": datetime.now().isoformat(),
                 "total_entries": len(timeline),
                 "timeline": timeline,
@@ -315,7 +308,6 @@ def save_memoir_output(
     json_path.write_text(
         json.dumps(
             {
-                "username": username,
                 "generated_at": datetime.now().isoformat(),
                 "length": len(memoir_text),
                 "content": memoir_text,

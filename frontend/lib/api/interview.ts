@@ -1,4 +1,4 @@
-import { apiDelete, apiPost } from "@/lib/api/client";
+import { apiDelete, apiPatch, apiPost } from "@/lib/api/client";
 import type {
   SessionActionData,
   SessionCloseData,
@@ -24,4 +24,11 @@ export async function flushInterviewSession(sessionId: string): Promise<SessionA
 
 export async function closeInterviewSession(sessionId: string): Promise<SessionCloseData> {
   return apiDelete<SessionCloseData>(`/session/${sessionId}`);
+}
+
+export async function togglePendingEventPriority(
+  sessionId: string,
+  eventId: string,
+): Promise<SessionActionData> {
+  return apiPatch<SessionActionData>(`/session/${sessionId}/pending-event/${eventId}/priority`);
 }

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from ....core.config import GenerationConfig, get_settings
 from ....core.paths import get_data_root
 from ....application.generate.generator.memoir_generator import MemoirGenerator
 from ....application.generate.generator.timeline_generator import TimelineGenerator
-from src.application.contracts.llm import LLMGatewayProtocol
+from ....application.contracts.llm import LLMGatewayProtocol
+from ....infra.database.sqlite_client import SQLiteClient
+from ....infra.database.store.chunk_store import ChunkStore
 
 
 @dataclass
@@ -19,8 +20,8 @@ class GenerateWorkflowRuntime:
 
     username: str
     data_base_dir: Path
-    sqlite_client: Any
-    chunk_store: Any
+    sqlite_client: SQLiteClient
+    chunk_store: ChunkStore
     timeline_generator: TimelineGenerator
     memoir_generator: MemoirGenerator
     config: GenerationConfig
@@ -38,14 +39,20 @@ class GenerateWorkflowRuntime:
             config = get_settings().generation
         if data_base_dir is None:
             data_base_dir = get_data_root()
-        from src.infra.factories import build_generate_storage_dependencies
+        from ....infra.factories import build_generate_storage_dependencies
 
         sqlite_client, chunk_store = build_generate_storage_dependencies(
             username=username,
             data_base_dir=Path(data_base_dir),
         )
-        timeline_generator = TimelineGenerator(llm_gateway=llm_gateway)
-        memoir_generator = MemoirGenerator(llm_gateway=llm_gateway)
+        timeline_generator = TimelineGenerator(
+            llm_gateway=llm_gateway,
+            model=llm_gateway.config.creative_model,
+        )
+        memoir_generator = MemoirGenerator(
+            llm_gateway=llm_gateway,
+            model=llm_gateway.config.creative_model,
+        )
 
         return cls(
             username=username,

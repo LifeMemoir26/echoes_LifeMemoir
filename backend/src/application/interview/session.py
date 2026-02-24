@@ -9,6 +9,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from typing_extensions import TypedDict
 
 from ...core.config import InterviewAssistanceConfig
 from ...core.paths import get_data_root
@@ -19,8 +20,25 @@ from ...application.workflows.interview import (
     run_interview_step,
     run_interview_step_streaming,
 )
+from .session_registry import registry as _registry
+from .dialogue_storage.dialogue_storage import BackgroundInfo
 
 logger = logging.getLogger(__name__)
+
+
+class PendingEventSummaryItem(TypedDict):
+    id: str
+    summary: str
+    is_priority: bool
+    explored_length: int
+    explored_content: str
+
+
+class PendingEventsSummary(TypedDict):
+    total: int
+    priority_count: int
+    unexplored_count: int
+    events: list[PendingEventSummaryItem]
 
 
 def _iso_now() -> str:
@@ -66,12 +84,18 @@ class InterviewSession:
             yield update
 
     async def flush_buffer(self) -> None:
-        await run_interview_step(self.workflow, thread_id=self.thread_id, flush=True)
+        """Trigger mark-and-drain summary if TmpStorage has enough content."""
+        self.runtime.storage.trigger_summary_update_if_ready(
+            session_id=self.thread_id,
+            registry=None,
+            trace_id="flush",
+            summary_processor=self.runtime.summary_processor,
+        )
 
     async def reset_session(self) -> None:
         await self.runtime.storage.clear_all()
 
-    def get_background_info(self) -> dict[str, Any]:
+    def get_background_info(self) -> BackgroundInfo:
         return self.runtime.storage.get_background_info()
 
     def get_event_supplements(self):
@@ -81,9 +105,9 @@ class InterviewSession:
         return self.runtime.storage.get_interview_suggestions()
 
     async def get_session_summaries(self) -> list[str]:
-        return await self.runtime.storage.get_latest_summaries_formatted()
+        return await self.runtime.storage.get_all_summaries_formatted()
 
-    async def get_pending_events_summary(self) -> dict[str, Any]:
+    async def get_pending_events_summary(self) -> PendingEventsSummary:
         total = await self.runtime.storage.pending_events_count()
         priority = await self.runtime.storage.get_priority_pending_events()
         unexplored = await self.runtime.storage.get_unexplored_pending_events()
@@ -103,26 +127,6 @@ class InterviewSession:
                 }
                 for event in all_events
             ],
-        }
-
-    async def get_interview_info(self) -> dict[str, Any]:
-        background_info = self.get_background_info()
-        pending_events_summary = await self.get_pending_events_summary()
-        session_summaries = await self.get_session_summaries()
-
-        return {
-            "background_info": background_info,
-            "pending_events": pending_events_summary,
-            "session_summaries": session_summaries,
-            "meta": {
-                "total_supplements": background_info["meta"]["supplement_count"],
-                "total_positive_triggers": background_info["meta"]["positive_trigger_count"],
-                "total_sensitive_topics": background_info["meta"]["sensitive_topic_count"],
-                "total_pending_events": pending_events_summary["total"],
-                "priority_pending_events": pending_events_summary["priority_count"],
-                "unexplored_pending_events": pending_events_summary["unexplored_count"],
-                "total_summaries": len(session_summaries),
-            },
         }
 
 
@@ -173,7 +177,6 @@ async def _bootstrap_pending_events(
         # Publish SSE event so frontend can update the pending events panel
         if session_id:
             pending = await session.get_pending_events_summary()
-            from ...app.api.v1.session_registry import registry as _registry
             await _registry.publish(
                 session_id,
                 "context",
@@ -193,14 +196,13 @@ async def _bootstrap_pending_events(
 async def _bootstrap_supplements_bg(
     session: InterviewSession,
     session_id: str,
-    registry: object,
     trace_id: str,
 ) -> None:
     """初始化事件补充信息：用人生事件全文 + 人物侧写生成，无需对话上下文。"""
     try:
         all_events = session.runtime.sqlite_client.get_all_events()
         life_events_text = "\n".join(
-            f"[{e.get('year', '?')}] {e.get('event_summary', '')}: {e.get('event_details', '')}"
+            f"[{e.year or '?'}] {e.event_summary}: {e.event_details or ''}"
             for e in all_events
         ) if all_events else "暂无人生事件记录"
         char_profile = session.runtime.sqlite_client.get_character_profile_text()
@@ -214,7 +216,6 @@ async def _bootstrap_supplements_bg(
 
         session.runtime.storage.update_event_supplements(result.supplements)
 
-        from ...app.api.v1.session_registry import registry as _registry
         await _registry.publish(
             session_id,
             "context",
@@ -234,14 +235,13 @@ async def _bootstrap_supplements_bg(
 async def _bootstrap_anchors_bg(
     session: InterviewSession,
     session_id: str,
-    registry: object,
     trace_id: str,
 ) -> None:
     """初始化情感锚点：用人生事件全文 + 人物侧写生成，无需对话上下文。"""
     try:
         all_events = session.runtime.sqlite_client.get_all_events()
         life_events_text = "\n".join(
-            f"[{e.get('year', '?')}] {e.get('event_summary', '')}: {e.get('event_details', '')}"
+            f"[{e.year or '?'}] {e.event_summary}: {e.event_details or ''}"
             for e in all_events
         ) if all_events else "暂无人生事件记录"
         char_profile = session.runtime.sqlite_client.get_character_profile_text()
@@ -257,7 +257,6 @@ async def _bootstrap_anchors_bg(
             result.positive_triggers, result.sensitive_topics
         )
 
-        from ...app.api.v1.session_registry import registry as _registry
         await _registry.publish(
             session_id,
             "context",
@@ -275,15 +274,6 @@ async def _bootstrap_anchors_bg(
         )
 
 
-async def add_dialogue(
-    session: InterviewSession,
-    speaker: str,
-    content: str,
-    timestamp: float | None = None,
-) -> None:
-    await session.add_dialogue(speaker, content, timestamp)
-
-
 async def add_dialogue_streaming(
     session: InterviewSession,
     speaker: str,
@@ -292,25 +282,6 @@ async def add_dialogue_streaming(
 ) -> AsyncGenerator[dict[str, Any], None]:
     async for update in session.add_dialogue_streaming(speaker, content, timestamp):
         yield update
-
-
-async def flush_dialogue_streaming(
-    session: InterviewSession,
-) -> AsyncGenerator[dict[str, Any], None]:
-    async for update in run_interview_step_streaming(
-        session.workflow,
-        thread_id=session.thread_id,
-        flush=True,
-    ):
-        yield update
-
-
-async def get_interview_info(session: InterviewSession) -> dict[str, Any]:
-    return await session.get_interview_info()
-
-
-async def flush_session_buffer(session: InterviewSession) -> None:
-    await session.flush_buffer()
 
 
 async def reset_interview_session(session: InterviewSession) -> None:

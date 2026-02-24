@@ -165,7 +165,6 @@ class WorkflowFacade:
         thread_id: str,
         speaker: str | None = None,
         content: str | None = None,
-        flush: bool = False,
     ) -> dict[str, Any]:
         workflow = self._get_interview_workflow()
         return await run_interview_step(
@@ -173,7 +172,6 @@ class WorkflowFacade:
             thread_id=thread_id,
             speaker=speaker,
             content=content,
-            flush=flush,
         )
 
     async def execute_workflow(

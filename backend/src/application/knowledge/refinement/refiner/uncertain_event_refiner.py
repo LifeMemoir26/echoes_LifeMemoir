@@ -4,8 +4,8 @@ Uncertain Event Refiner for Year 9999 Events
 """
 import json
 import logging
-from typing import List, Dict, Any
-from src.application.contracts.llm import LLMGatewayProtocol
+from typing import List, Dict, Any, Optional
+from ....contracts.llm import LLMGatewayProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +97,16 @@ INFER_PROMPT = """你是一位专业的人生传记整理专家。
 class UncertainEventRefiner:
     """不确定年份事件优化器"""
     
-    def __init__(self, concurrency_manager: LLMGatewayProtocol):
+    def __init__(self, concurrency_manager: LLMGatewayProtocol, model: Optional[str] = None):
         """
         初始化
-        
+
         Args:
             concurrency_manager: 全局并发管理器
+            model: LLM 模型名称，None 则由网关决定
         """
         self.concurrency_manager = concurrency_manager
+        self.model = model
         
     async def refine_uncertain_events(
         self, 
@@ -157,7 +159,7 @@ class UncertainEventRefiner:
             refined_events = await self.concurrency_manager.generate_structured(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                model="deepseek-v3",
+                model=self.model,
                 temperature=0.2,  # 稍高温度以支持推理
                 max_tokens=16384
             )

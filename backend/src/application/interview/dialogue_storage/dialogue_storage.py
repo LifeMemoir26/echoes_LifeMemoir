@@ -1,13 +1,14 @@
 """
 对话存储统一管理类
-整合对话缓冲区、临时存储、最近总结、待探索事件和背景信息的功能
+整合对话缓冲区、临时存储、摘要队列、待探索事件和背景信息的功能
 """
 import asyncio
 from typing import Optional, List, Tuple, TYPE_CHECKING
+from typing_extensions import TypedDict
 import logging
 
 from .buff import DialogueBuffer, DialogueTurn
-from .tmp_storage import TmpStorage, TextChunk
+from .tmp_storage import TmpStorage
 from .pending_event import (
     PendingEvent, 
     PendingEventManager,
@@ -15,7 +16,7 @@ from .pending_event import (
     UPDATE_EXPLORED,
     UPDATE_SUMMARY
 )
-from .summary import SummaryManager, SummaryQueue
+from .summary import SummaryQueue
 from .event_supplement import EventSupplementManager
 from .interview_suggestion import InterviewSuggestionManager
 from ....domain.schemas.interview import EventSupplement, InterviewSuggestions
@@ -26,22 +27,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class BackgroundInfoMeta(TypedDict):
+    supplement_count: int
+    positive_trigger_count: int
+    sensitive_topic_count: int
+
+
+class BackgroundInfo(TypedDict):
+    event_supplements: list[dict[str, str]]
+    positive_triggers: list[str]
+    sensitive_topics: list[str]
+    meta: BackgroundInfoMeta
+
+
 class DialogueStorage:
     """
     对话存储统一管理类
     
-    整合六层存储机制：
+    整合五层存储机制：
     1. 对话缓冲区（DialogueBuffer）：维护最近N轮对话
     2. 临时存储区（TmpStorage）：累积移除的对话，达到阈值后输出文本块
-    3. 最近总结（SummaryManager）：存储最近一次提取的总结信息
+    3. 摘要队列（SummaryQueue）：FIFO 保留最近 M 批次的摘要
     4. 待探索事件（PendingEventManager）：管理需要深入探索的事件列表
     5. 事件补充信息（EventSupplementManager）：存储最新的事件详细补充
     6. 采访建议（InterviewSuggestionManager）：存储正面触发点和敏感话题
     
     工作流程：
     - 添加对话 -> 缓冲区满时移除最旧对话 -> 移入临时存储
-    - 临时存储达到阈值 -> 输出文本块
-    - 文本块提取总结 -> 设置为最近总结（覆盖旧总结）
+    - 临时存储达到阈值 -> mark-and-drain 异步摘要提取
+    - 摘要推入摘要队列
     - 从总结中识别需要探索的事件 -> 添加到待探索事件列表（供前端轮询）
     - 生成背景信息 -> 更新事件补充和采访建议（供前端轮询）
     
@@ -66,17 +80,16 @@ class DialogueStorage:
             storage_threshold: 临时存储字符数阈值
             summary_queue_size: SummaryQueue 批次容量
         """
-        # 初始化七个组件
+        # 初始化六个组件
         self.buffer = DialogueBuffer(max_size=queue_max_size)
         self.tmp_storage = TmpStorage(threshold=storage_threshold)
-        self.summary_manager = SummaryManager()  # kept for backward compat
         self.summary_queue = SummaryQueue(capacity=summary_queue_size)
         self.pending_event_manager = PendingEventManager()
         self.event_supplement_manager = EventSupplementManager()
         self.interview_suggestion_manager = InterviewSuggestionManager()
 
         logger.info(
-            f"DialogueStorage initialized with 7 components: "
+            f"DialogueStorage initialized with 6 components: "
             f"queue_max_size={queue_max_size}, storage_threshold={storage_threshold}, "
             f"summary_queue_size={summary_queue_size}"
         )
@@ -94,37 +107,21 @@ class DialogueStorage:
         speaker: str,
         content: str,
         timestamp: Optional[float] = None
-    ) -> Optional[TextChunk]:
+    ) -> None:
         """
         向存储系统中添加一轮对话
-        
+
         处理流程：
         1. 添加到对话缓冲区
         2. 如果缓冲区满，移除的对话进入临时存储
-        3. 如果临时存储达到阈值，返回文本块并清理临时存储
-        
-        Args:
-            speaker: 说话者标识
-            content: 对话内容
-            timestamp: 时间戳（可选）
-        
-        Returns:
-            如果临时存储达到阈值，返回TextChunk；否则返回None
+        （摘要提取统一由 trigger_summary_update_if_ready 的 mark-and-drain 异步驱动）
         """
-        # 创建对话轮次
         turn = DialogueTurn(speaker=speaker, content=content, timestamp=timestamp)
-
-        # 单调递增计数器（每次 add_dialogue 调用自增）
         self.dialogue_count += 1
 
-        # 添加到缓冲区，可能返回被移除的对话
         removed_turn = self.buffer.add(turn)
-        
-        # 如果有对话被移除，添加到临时存储
         if removed_turn is not None:
-            return self.tmp_storage.add(removed_turn)
-        
-        return None
+            self.tmp_storage.add(removed_turn)
 
     # =========================================================================
     # 对话缓冲区相关方法
@@ -175,15 +172,6 @@ class DialogueStorage:
     # 临时存储相关方法
     # =========================================================================
     
-    def flush_tmp_storage(self) -> Optional[TextChunk]:
-        """
-        手动刷新临时存储
-        
-        Returns:
-            如果临时存储不为空，返回文本块；否则返回None
-        """
-        return self.tmp_storage.flush()
-    
     def tmp_storage_size(self) -> int:
         """返回临时存储当前字符数"""
         return self.tmp_storage.chars_count()
@@ -197,65 +185,20 @@ class DialogueStorage:
         return self.tmp_storage.is_empty()
     
     # =========================================================================
-    # 最近总结相关方法
+    # 摘要队列相关方法（SummaryQueue）
     # =========================================================================
-    
-    async def set_latest_summaries(self, summaries: List[Tuple[int, str]]):
-        """
-        设置最近一次的总结（替换之前的）
-        
-        Args:
-            summaries: 总结列表，每项为 (importance, summary) 元组
-        """
-        await self.summary_manager.set(summaries)
-    
-    async def get_latest_summaries(self) -> List[Tuple[int, str]]:
-        """
-        获取最近一次的总结（结构化格式）
-        
-        Returns:
-            总结列表的副本，每项为 (importance, summary) 元组
-        """
-        return await self.summary_manager.get()
-    
-    async def get_latest_summaries_formatted(self) -> List[str]:
-        """
-        获取最近一次的总结（格式化字符串）
-        
-        Returns:
-            格式化的总结列表："（重要性：X）摘要"
-        """
-        return await self.summary_manager.get_formatted()
-    
-    async def get_summaries_count(self) -> int:
-        """
-        获取总结数量
-        
-        Returns:
-            总结数量
-        """
-        return await self.summary_manager.count()
-    
-    async def has_summaries(self) -> bool:
-        """
-        检查是否有总结
-        
-        Returns:
-            是否有总结
-        """
-        return await self.summary_manager.has_summaries()
-    
-    async def clear_summaries(self):
-        """清空最近的总结"""
-        await self.summary_manager.clear()
 
     async def push_summaries(self, summaries: List[Tuple[int, str]]) -> None:
-        """向 SummaryQueue 追加一批摘要（替代 set_latest_summaries 的新路径）。"""
+        """向 SummaryQueue 追加一批摘要。"""
         await self.summary_queue.push(summaries)
 
     async def get_all_summaries(self) -> List[Tuple[int, str]]:
         """从 SummaryQueue 获取所有批次展平后的摘要 tuples（oldest-first）。"""
         return await self.summary_queue.get_all()
+
+    async def get_all_summaries_formatted(self) -> List[str]:
+        """从 SummaryQueue 获取所有摘要的格式化字符串列表。"""
+        return await self.summary_queue.get_all_formatted()
     
     # =========================================================================
     # 待探索事件相关方法
@@ -399,20 +342,20 @@ class DialogueStorage:
         Returns:
             是否追加成功
         """
-        return await self.pending_event_manager.append_explored_content(event_id, content)
-    
+        return await self.pending_event_manager.update(event_id, explored_content=content)
+
     async def set_pending_event_priority(self, event_id: str, is_priority: bool) -> bool:
         """
         设置待探索事件的优先级
-        
+
         Args:
             event_id: 事件ID
             is_priority: 是否优先
-        
+
         Returns:
             是否设置成功
         """
-        return await self.pending_event_manager.set_priority(event_id, is_priority)
+        return await self.pending_event_manager.update(event_id, is_priority=is_priority)
     
     async def reorder_pending_events(self) -> None:
         """
@@ -461,16 +404,16 @@ class DialogueStorage:
         summary_processor: object,
     ) -> None:
         """
-        若 TmpStorage 有内容且无摘要任务在飞，则启动 mark-and-drain 摘要更新。
+        若 TmpStorage 达到阈值且无摘要任务在飞，则启动 mark-and-drain 摘要更新。
 
         Guard 逻辑：若 _summary_in_flight == True，立即返回（防并发）。
         """
         if self._summary_in_flight:
             return
-        mark = self.tmp_storage.mark_position()
-        if mark == 0:
-            return  # 存储为空，无需触发
+        if not self.tmp_storage.should_drain():
+            return  # 未达阈值，无需触发
         self._summary_in_flight = True
+        mark = self.tmp_storage.mark_position()
         asyncio.create_task(
             self._summary_update_bg(mark, session_id, registry, trace_id, summary_processor)
         )
@@ -488,7 +431,6 @@ class DialogueStorage:
         1. 读取 [0, mark) 范围内容
         2. AI 摘要
         3. 清除已处理内容，push 到 SummaryQueue
-        4. 若剩余字符仍 >= 阈值，立即重触发
         """
         from ....domain.schemas.dialogue import TextChunk
 
@@ -520,9 +462,6 @@ class DialogueStorage:
             )
         finally:
             self._summary_in_flight = False
-            # 若剩余内容仍达到阈值，立即重触发
-            if self.tmp_storage.chars_count() >= self.tmp_storage.threshold:
-                self.trigger_summary_update_if_ready(session_id, registry, trace_id, summary_processor)
 
     # =========================================================================
     # 通用方法
@@ -531,7 +470,6 @@ class DialogueStorage:
     async def clear_all(self):
         self.buffer.clear()
         self.tmp_storage.clear()
-        await self.clear_summaries()
         await self.summary_queue.clear()
         await self.clear_pending_events()
         self.event_supplement_manager.clear()
@@ -591,7 +529,7 @@ class DialogueStorage:
         """
         return self.interview_suggestion_manager.get_all()
     
-    def get_background_info(self) -> dict:
+    def get_background_info(self) -> BackgroundInfo:
         """
         获取完整的背景信息（供前端轮询）
         
@@ -618,7 +556,7 @@ class DialogueStorage:
             f"DialogueStorage("
             f"buffer={self.buffer}, "
             f"tmp_storage={self.tmp_storage}, "
-            f"summaries={self.summary_manager}, "
+            f"summary_queue={self.summary_queue}, "
             f"pending_events={self.pending_event_manager}, "
             f"supplements={self.event_supplement_manager}, "
             f"suggestions={self.interview_suggestion_manager})"

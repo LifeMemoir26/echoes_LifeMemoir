@@ -13,6 +13,7 @@
     manager = ConcurrencyManager(concurrency_level=22)
 """
 import asyncio
+import inspect
 import time
 import logging
 from typing import Optional, List, Callable, Any, TypeVar, Coroutine, Union
@@ -21,10 +22,44 @@ from copy import deepcopy
 
 from ...core.config import get_settings, LLMConfig
 from .client.qiniu_client import AsyncQiniuAIClient
+from .call_logger import get_call_logger, resolve_tag
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
+
+# ── 调试日志：自动识别 API 调用来源 ─────────────────────────
+_INFRA_MODULES = {"concurrency_manager", "gateway", "qiniu_client"}
+
+
+def _resolve_caller() -> tuple[str, str]:
+    """沿调用栈向上查找第一个不属于 LLM 基础设施的帧。
+
+    Returns:
+        (caller, where) — caller 如 "TimelineGenerator.generate_timeline_entries"，
+        where 如 "backend/src/.../timeline_generator.py::TimelineGenerator.generate_timeline_entries()"
+    """
+    for frame_info in inspect.stack()[2:]:  # 跳过自身 + 直接调用者
+        module = inspect.getmodule(frame_info.frame)
+        if module is None:
+            continue
+        mod_name = module.__name__.rsplit(".", 1)[-1]
+        if mod_name not in _INFRA_MODULES:
+            cls_name = ""
+            local_self = frame_info.frame.f_locals.get("self")
+            if local_self is not None:
+                cls_name = type(local_self).__name__ + "."
+            caller = f"{cls_name}{frame_info.function}"
+            # 构建 where: 相对路径::Class.method()
+            try:
+                from pathlib import Path
+                from ...core.paths import get_project_root
+                filepath = Path(frame_info.filename)
+                where = f"{filepath.relative_to(get_project_root())}::{caller}()"
+            except Exception:
+                where = f"{frame_info.filename}::{caller}()"
+            return caller, where
+    return "unknown", "unknown"
 
 
 @dataclass
@@ -217,6 +252,26 @@ class ConcurrencyManager:
                     self.stats.successful_requests += 1
                     elapsed = time.time() - start_time
                     self.stats.total_time += elapsed
+                    caller, where = _resolve_caller()
+                    resolved_model = getattr(result, "model", model) or "default"
+                    total_tokens = getattr(result, "total_tokens", None)
+                    logger.debug(
+                        "[LLM·chat] caller=%s model=%s key=#%d tokens=%s latency=%.1fs",
+                        caller, resolved_model, key_index + 1,
+                        total_tokens or "?", elapsed,
+                    )
+                    get_call_logger().log_call(
+                        tag=resolve_tag(caller),
+                        where=where,
+                        call_type="chat",
+                        model=resolved_model,
+                        messages=messages,
+                        raw_response=getattr(result, "content", None),
+                        response_length=len(getattr(result, "content", "") or ""),
+                        latency_s=elapsed,
+                        key_index=key_index,
+                        tokens=total_tokens,
+                    )
                     return result
                     
                 except Exception as e:
@@ -273,48 +328,6 @@ class ConcurrencyManager:
             # 理论上不应该到这里
             raise Exception("Exhausted all retry attempts")
     
-    async def batch_chat(
-        self,
-        requests: List[dict],
-    ) -> List[Any]:
-        """
-        批量提交聊天请求（自动并发控制）
-        
-        Args:
-            requests: 请求列表，每个请求是包含chat()参数的字典
-                例: [
-                    {"messages": [...], "model": "claude", "temperature": 0.1},
-                    {"messages": [...], "model": "gpt-4", "temperature": 0.7},
-                ]
-        
-        Returns:
-            结果列表
-        """
-        logger.info(
-            f"Starting batch chat: "
-            f"{len(requests)} requests with concurrency={self.concurrency_level}"
-        )
-        
-        start_time = time.time()
-        
-        # 并发提交所有请求
-        tasks = [self.chat(**req) for req in requests]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        total_time = time.time() - start_time
-        success_count = sum(1 for r in results if not isinstance(r, Exception))
-        
-        logger.info(
-            f"Batch chat completed: "
-            f"total={len(results)}, "
-            f"success={success_count}, "
-            f"failed={len(results) - success_count}, "
-            f"time={total_time:.2f}s, "
-            f"rps={len(results)/total_time:.2f}"
-        )
-        
-        return results
-    
     async def generate_structured(
         self,
         prompt: str,
@@ -350,7 +363,7 @@ class ConcurrencyManager:
             )
             print(result["personality"])  # 直接使用字典
         """
-        from src.infra.utils.json_parser import parse_json_basic, create_fix_prompt
+        from ..utils.json_parser import parse_json_basic, create_fix_prompt
         
         async with self.semaphore:
             # 记录请求
@@ -383,6 +396,26 @@ class ConcurrencyManager:
                         self.stats.successful_requests += 1
                         elapsed = time.time() - start_time
                         self.stats.total_time += elapsed
+                        caller, where = _resolve_caller()
+                        resolved_model = model or "default"
+                        logger.debug(
+                            "[LLM·structured] caller=%s model=%s key=#%d "
+                            "json_len=%d latency=%.1fs",
+                            caller, resolved_model, key_index + 1,
+                            len(raw_response), elapsed,
+                        )
+                        get_call_logger().log_call(
+                            tag=resolve_tag(caller),
+                            where=where,
+                            call_type="structured",
+                            model=resolved_model,
+                            prompt=prompt,
+                            system_prompt=system_prompt,
+                            raw_response=raw_response,
+                            response_length=len(raw_response),
+                            latency_s=elapsed,
+                            key_index=key_index,
+                        )
                         return result
                     
                     # 4. 初级修复失败，尝试LLM修复（最多max_fix_attempts次）
@@ -399,7 +432,7 @@ class ConcurrencyManager:
                                     {"role": "system", "content": system_prompt},
                                     {"role": "user", "content": user_prompt}
                                 ],
-                                model=model or self.config.conversation_model,
+                                model=model or self.config.utility_model,
                                 temperature=0.1,
                                 max_tokens=32000,
                                 json_mode=False  # 避免循环
@@ -476,79 +509,6 @@ class ConcurrencyManager:
                         raise
             
             raise Exception("Exhausted all retry attempts")
-    
-    async def generate_image(
-        self,
-        prompt: str,
-        model: str = "gemini-2.5-flash-image",
-        aspect_ratio: str = "16:9",
-        image_size: str = "4K",
-        **kwargs
-    ) -> dict:
-        """
-        生成图片（文生图）
-        
-        Args:
-            prompt: 图片描述提示词
-            model: 图片生成模型（gemini-3.0-pro-image-preview 或 gemini-2.5-flash-image）
-            aspect_ratio: 宽高比（1:1, 16:9, 9:16等）
-            image_size: 分辨率（1K, 2K, 4K，仅pro模型支持）
-            **kwargs: 其他参数
-            
-        Returns:
-            包含生成图片的字典（b64_json格式）
-        """
-        async with self.semaphore:
-            api_key, key_index = await self._get_next_key()
-            client = self.clients[key_index]
-            
-            try:
-                result = await client.generate_image(
-                    prompt=prompt,
-                    model=model,
-                    aspect_ratio=aspect_ratio,
-                    image_size=image_size,
-                    **kwargs
-                )
-                return result
-            except Exception as e:
-                logger.error(f"Image generation failed: {e}")
-                raise
-    
-    async def edit_image(
-        self,
-        image_url: str,
-        prompt: str,
-        model: str = "gemini-2.5-flash-image",
-        **kwargs
-    ) -> dict:
-        """
-        编辑图片（图生图）
-        
-        Args:
-            image_url: 输入图片URL或Base64
-            prompt: 编辑指令
-            model: 图片生成模型
-            **kwargs: 其他参数
-            
-        Returns:
-            包含编辑后图片的字典（b64_json格式）
-        """
-        async with self.semaphore:
-            api_key, key_index = await self._get_next_key()
-            client = self.clients[key_index]
-            
-            try:
-                result = await client.edit_image(
-                    image_url=image_url,
-                    prompt=prompt,
-                    model=model,
-                    **kwargs
-                )
-                return result
-            except Exception as e:
-                logger.error(f"Image editing failed: {e}")
-                raise
     
     def get_stats(self) -> ConcurrencyStats:
         """获取统计信息"""

@@ -6,7 +6,6 @@
 1. 待探索事件（Pending Events）
    - PendingEvent: 待探索事件实体，包含事件ID、摘要、已探索内容和优先级
    - PendingEventCandidate: 待探索事件候选，用于初始化阶段从数据库或AI提取
-   - EventDetailExtraction: 事件详情提取结果，用于从对话中提取事件相关信息
 
 2. 事件补充信息（Event Supplements）
    - EventSupplement: 单个事件的补充信息，包含摘要和详细描述
@@ -14,9 +13,6 @@
 
 3. 采访建议（Interview Suggestions）
    - InterviewSuggestions: 采访建议，包含正面触发点和敏感话题
-
-4. 综合背景信息（Context Info）
-   - ContextInfo: 综合的采访背景信息，整合事件补充和采访建议
 """
 from typing import List
 from dataclasses import dataclass
@@ -58,18 +54,6 @@ class PendingEventCandidate(BaseModel):
     is_priority: bool = Field(default=False, description="是否优先探索")
 
 
-class EventDetailExtraction(BaseModel):
-    """
-    事件详情提取结果（AI 输出）
-    
-    从当前对话轮次中提取特定待探索事件的详细信息。
-    用于更新 PendingEvent 的 explored_content 字段。
-    """
-    event_id: str = Field(description="事件ID（与 PendingEvent.id 对应）")
-    explored_content: str = Field(description="从对话中探索到的内容")
-    is_priority: bool = Field(description="是否调整为优先事件")
-
-
 # ==============================================================================
 # 2. 事件补充信息（Event Supplements）
 # ==============================================================================
@@ -108,33 +92,6 @@ class InterviewSuggestions(BaseModel):
     - positive_triggers: 可以引发叙述者积极回忆的话题或事物
     - sensitive_topics: 需要谨慎处理的敏感话题，避免引起不适
     """
-    positive_triggers: List[str] = Field(
-        description="让叙述者高兴的点、激发联想的人或事物"
-    )
-    sensitive_topics: List[str] = Field(
-        description="可能引发伤感的话题，需要谨慎处理"
-    )
-
-
-# ==============================================================================
-# 4. 综合背景信息（Context Info）
-# ==============================================================================
-
-class ContextInfo(BaseModel):
-    """
-    采访背景信息（综合输出）
-    
-    整合事件补充和采访建议的完整背景信息。
-    由 SupplementExtractor 生成，供前端轮询展示给志愿者。
-    
-    使用场景：
-    - 志愿者查看当前采访的背景信息
-    - 志愿者获取下一步采访建议
-    - 前端定期轮询更新显示
-    """
-    event_supplements: List[EventSupplement] = Field(
-        description="事件补充信息列表"
-    )
     positive_triggers: List[str] = Field(
         description="让叙述者高兴的点、激发联想的人或事物"
     )

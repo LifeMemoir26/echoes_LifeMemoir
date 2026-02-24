@@ -1,11 +1,11 @@
 """
 对话存储模块
-提供对话缓冲区、临时存储、最近总结、待探索事件和背景信息的统一管理
+提供对话缓冲区、临时存储、摘要队列、待探索事件和背景信息的统一管理
 """
-from .dialogue_storage import DialogueStorage
+from .dialogue_storage import DialogueStorage, BackgroundInfo, BackgroundInfoMeta
 from .buff import DialogueBuffer
 from .tmp_storage import TmpStorage
-from .summary import SummaryManager
+from .summary import SummaryQueue
 from .pending_event import (
     PendingEventManager,
     UPDATE_PRIORITY,
@@ -25,9 +25,11 @@ from ....domain.schemas.interview import (
 
 __all__ = [
     "DialogueStorage",
+    "BackgroundInfo",
+    "BackgroundInfoMeta",
     "DialogueBuffer",
     "TmpStorage",
-    "SummaryManager",
+    "SummaryQueue",
     "PendingEvent",
     "PendingEventManager",
     "DialogueTurn",

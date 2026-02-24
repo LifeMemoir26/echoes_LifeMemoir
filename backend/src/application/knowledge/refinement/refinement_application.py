@@ -3,13 +3,14 @@ Refinement Pipeline
 数据库结果优化流程 - 协调三个优化器完成完整的优化工作
 """
 import logging
-from typing import Dict, Any
-from src.infra.database.sqlite_client import SQLiteClient
+from typing import Dict, Any, Optional
+from ....infra.database.sqlite_client import SQLiteClient
+from ....domain.schemas.knowledge import LifeEvent, CharacterProfile
 from .refiner.event_refiner import EventRefiner
 from .refiner.uncertain_event_refiner import UncertainEventRefiner
 from .refiner.event_details_refiner import EventDetailsRefiner
 from .refiner.character_profile_refiner import CharacterProfileRefiner
-from src.application.contracts.llm import LLMGatewayProtocol
+from ...contracts.llm import LLMGatewayProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -17,19 +18,27 @@ logger = logging.getLogger(__name__)
 class RefinementPipeline:
     """数据库结果优化流程"""
     
-    def __init__(self, db_client: SQLiteClient, llm_gateway: LLMGatewayProtocol):
+    def __init__(
+        self,
+        db_client: SQLiteClient,
+        llm_gateway: LLMGatewayProtocol,
+        extraction_model: Optional[str] = None,
+        utility_model: Optional[str] = None,
+    ):
         """
         初始化
-        
+
         Args:
             db_client: 数据库客户端
             llm_gateway: 全局 LLM 运行时网关
+            extraction_model: 抽取类 LLM 模型名称
+            utility_model: 工具类 LLM 模型名称
         """
         self.db_client = db_client
-        self.event_refiner = EventRefiner(llm_gateway)
-        self.uncertain_refiner = UncertainEventRefiner(llm_gateway)
-        self.details_refiner = EventDetailsRefiner(llm_gateway)
-        self.profile_refiner = CharacterProfileRefiner(llm_gateway)
+        self.event_refiner = EventRefiner(llm_gateway, model=extraction_model)
+        self.uncertain_refiner = UncertainEventRefiner(llm_gateway, model=extraction_model)
+        self.details_refiner = EventDetailsRefiner(llm_gateway, model=utility_model)
+        self.profile_refiner = CharacterProfileRefiner(llm_gateway, model=extraction_model, utility_model=utility_model)
         
     async def refine_all(self) -> Dict[str, Any]:
         """
@@ -122,18 +131,20 @@ class RefinementPipeline:
         """优化精准年份事件（结果1）"""
         # 从数据库读取精准年份事件
         all_events = self.db_client.get_all_events()
-        precise_events = [e for e in all_events if e.get("year") != "9999"]
-        
+        precise_events = [e for e in all_events if e.year != "9999"]
+
         stats["events_precise_before"] = len(precise_events)
-        
+
         if not precise_events:
             logger.warning("数据库中没有精准年份事件")
             return []
-            
+
         logger.info(f"从数据库读取 {len(precise_events)} 条精准年份事件")
-        
-        # 调用优化器
-        refined = await self.event_refiner.refine_events(precise_events)
+
+        # 调用优化器（refiners 接受/返回 list[dict]）
+        refined = await self.event_refiner.refine_events(
+            [e.model_dump() for e in precise_events]
+        )
         
         stats["events_precise_after"] = len(refined)
         
@@ -147,7 +158,7 @@ class RefinementPipeline:
         """优化不确定年份事件（基于结果1'的上下文）"""
         # 从数据库读取不确定年份事件
         all_events = self.db_client.get_all_events()
-        uncertain_events = [e for e in all_events if e.get("year") == "9999"]
+        uncertain_events = [e for e in all_events if e.year == "9999"]
         
         stats["events_uncertain_before"] = len(uncertain_events)
         stats["events_before"] = len(all_events)
@@ -158,9 +169,9 @@ class RefinementPipeline:
             
         logger.info(f"从数据库读取 {len(uncertain_events)} 条不确定年份事件")
         
-        # 调用优化器（使用精准事件作为上下文）
+        # 调用优化器（使用精准事件作为上下文，LifeEvent → dict for refiner）
         refined = await self.uncertain_refiner.refine_uncertain_events(
-            uncertain_events, context_events
+            [e.model_dump() for e in uncertain_events], context_events
         )
         
         # 统计推测出年份的数量
@@ -192,7 +203,7 @@ class RefinementPipeline:
         
         # 从数据库读取所有原始事件的 id -> event_details 映射
         all_original_events = self.db_client.get_all_events()
-        id_to_details = {e.get('id'): e.get('event_details', '') for e in all_original_events}
+        id_to_details = {e.id: e.event_details or '' for e in all_original_events}
         
         for event in all_refined_events:
             merged_ids = event.get('merged_from_ids', [])
@@ -224,9 +235,10 @@ class RefinementPipeline:
         self.db_client.clear_events()
         logger.info("已清空数据库中的原有事件")
         
-        # 批量写入
+        # 批量写入（dict → LifeEvent for insert_events）
         if all_refined_events:
-            self.db_client.insert_events(all_refined_events)
+            models = [LifeEvent.model_validate(e) for e in all_refined_events]
+            self.db_client.insert_events(models)
             logger.info(f"已写入 {len(all_refined_events)} 条优化后的事件")
         else:
             logger.warning("没有事件需要写入")
@@ -243,12 +255,14 @@ class RefinementPipeline:
             
         logger.info("从数据库读取人物档案")
         
-        # 调用优化器
-        refined_profile = await self.profile_refiner.refine_profile(profile)
-        
+        # 调用优化器（CharacterProfile → dict for refiner, dict → CharacterProfile for db）
+        refined_profile = await self.profile_refiner.refine_profile(profile.model_dump())
+
         # 写回数据库
         self.db_client.clear_character_profile()
-        self.db_client.insert_character_profile(refined_profile)
+        self.db_client.insert_character_profile(
+            CharacterProfile.model_validate(refined_profile)
+        )
         
         logger.info("人物档案已优化并写回数据库")
         stats["profile_refined"] = True

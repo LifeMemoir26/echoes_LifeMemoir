@@ -11,7 +11,7 @@ from ....core.paths import get_data_root
 from ....application.interview.dialogue_storage import DialogueStorage
 
 if TYPE_CHECKING:
-    from src.application.contracts.llm import LLMGatewayProtocol
+    from ....application.contracts.llm import LLMGatewayProtocol
 
 
 @dataclass
@@ -49,18 +49,27 @@ class InterviewWorkflowRuntime:
         )
         from ....application.interview.actuator.summary_processor import SummaryProcessor
         from ....application.interview.actuator.supplement_extractor import SupplementExtractor
-        from src.infra.factories import build_interview_storage_dependencies
+        from ....infra.factories import build_interview_storage_dependencies
 
         storage = DialogueStorage(
             queue_max_size=config.dialogue_queue_size,
             storage_threshold=config.storage_threshold,
         )
+        llm_config = llm_gateway.config
         summary_processor = SummaryProcessor(
             llm_gateway=llm_gateway,
             config=config,
+            model=llm_config.conversation_model,
         )
-        pending_event_processor = PendingEventProcessor(llm_gateway=llm_gateway)
-        supplement_extractor = SupplementExtractor(llm_gateway=llm_gateway)
+        pending_event_processor = PendingEventProcessor(
+            llm_gateway=llm_gateway,
+            model=llm_config.conversation_model,
+            utility_model=llm_config.utility_model,
+        )
+        supplement_extractor = SupplementExtractor(
+            llm_gateway=llm_gateway,
+            model=llm_config.conversation_model,
+        )
 
         sqlite_client, vector_store, chunk_store = build_interview_storage_dependencies(
             username=username,
@@ -84,6 +93,7 @@ class InterviewWorkflowRuntime:
                 sqlite_client=sqlite_client,
                 vector_store=vector_store,
                 config=config,
+                model=llm_config.conversation_model,
             )
             runtime._initializer = initializer
 
