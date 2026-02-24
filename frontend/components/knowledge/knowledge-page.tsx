@@ -57,7 +57,7 @@ function FileCard({ item, index }: { item: MaterialItem; index: number }) {
     try {
       await deleteMaterial(item.id);
       void queryClient.invalidateQueries({ queryKey: ["materials"] });
-      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["knowledge", "events"] });
     } catch {
       // silently fail — user can retry
     } finally {

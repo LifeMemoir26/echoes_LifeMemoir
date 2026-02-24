@@ -54,7 +54,7 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
       const data = await uploadMaterial(username, selectedFiles, materialContext, displayName.trim(), skipProcessing, materialType);
       setResults(data.items);
       void queryClient.invalidateQueries({ queryKey: ["materials"] });
-      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["knowledge", "events"] });
       void queryClient.invalidateQueries({ queryKey: ["records"] });
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "上传失败");

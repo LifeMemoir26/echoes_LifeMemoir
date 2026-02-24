@@ -24,22 +24,21 @@ export function TimelinePage() {
   const { username } = useWorkspaceContext();
   const timeline = useGenerateTimeline();
 
-  const { register, getValues } = useForm<FormValues>({
+  const { register, handleSubmit } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       timeline_ratio: 0.3,
     },
   });
 
-  const handleGenerate = async () => {
-    const values = getValues();
+  const onGenerate = handleSubmit(async (values) => {
     await timeline.submit({
       username: username ?? "",
       ratio: values.timeline_ratio,
       user_preferences: values.user_preferences,
       auto_save: true,
     });
-  };
+  });
 
   const events = timeline.data?.timeline;
 
@@ -54,7 +53,7 @@ export function TimelinePage() {
           <p className="mt-1 text-sm text-slate-500">按时间顺序梳理人生事件</p>
         </div>
         {/* Inline parameter bar */}
-        <div className="flex flex-wrap items-end gap-4 pb-5 border-b border-black/[0.08]">
+        <form onSubmit={onGenerate} className="flex flex-wrap items-end gap-4 pb-5 border-b border-black/[0.08]">
           <label className="flex flex-col gap-1 min-w-[100px]">
             <span className="panel-label text-slate-400">
               时间线比例
@@ -79,8 +78,7 @@ export function TimelinePage() {
           </label>
           <div className="flex items-center gap-2 pb-0.5">
             <Button
-              type="button"
-              onClick={() => void handleGenerate()}
+              type="submit"
               disabled={timeline.isPending || !username}
             >
               <Sparkles className="mr-2 h-4 w-4" />
@@ -97,7 +95,7 @@ export function TimelinePage() {
               </Button>
             )}
           </div>
-        </div>
+        </form>
 
         {/* Error banner */}
         {timeline.error && (
