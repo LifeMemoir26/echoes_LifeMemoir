@@ -3,8 +3,8 @@
 ## 启动
 
 ```bash
-npm install
-npm run dev        # http://localhost:3000
+pnpm install
+pnpm run dev        # http://localhost:3000
 ```
 
 代码默认使用相对路径 `/api/v1`，由 `next.config.ts` 中的 rewrites 代理到 `http://127.0.0.1:8000/api/v1`。如需指向其他后端地址，可通过环境变量覆盖：
@@ -87,9 +87,10 @@ Card 材质：`bg-white/80 backdrop-blur-sm border border-black/[0.06]`
 ## 常用命令
 
 ```bash
-npm run dev              # 开发服务器
-npm run build            # 生产构建
-npm run typecheck        # TypeScript 类型检查
-npm run lint             # ESLint 检查
-npm run check:contract   # API 契约一致性检查
+pnpm run dev              # 开发服务器
+pnpm run build            # 生产构建
+pnpm run typecheck        # TypeScript 类型检查
+pnpm run test:unit        # Vitest 单元测试
+pnpm run lint             # ESLint 检查
+pnpm run check:contract   # API 契约一致性检查
 ```

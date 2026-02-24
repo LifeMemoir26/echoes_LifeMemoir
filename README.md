@@ -70,12 +70,12 @@ uvicorn src.app.main:app --reload --port 8000
 另开一个新的终端窗口：
 
 ```bash
-# 安装依赖
+# 如未安装 pnpm：npm install -g pnpm
 cd frontend
-npm install
+pnpm install
 
 # 启动
-npm run dev
+pnpm run dev
 ```
 
 ## 访问应用

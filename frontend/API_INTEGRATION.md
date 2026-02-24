@@ -12,7 +12,7 @@
   "errors": []
 }
 ```
-- Failure:
+- Failure (业务语义统一为 failed envelope；部分 FastAPI 错误会包在 `detail` 字段内，前端 client 已做解包兼容):
 ```json
 {
   "status": "failed",
@@ -64,7 +64,7 @@ All subsequent endpoints require `Authorization: Bearer <token>` header.
   - Response: `SessionActionData` (`session_id`, `thread_id`, `status`, `trace_id`)
 
 - `GET /session/{session_id}/events` (SSE)
-  - First event is always `connected`.
+  - 连接建立后会收到 `connected` 与初始 `context(event_id=0)`，二者顺序不保证。
   - Event types: `heartbeat`, `status`, `context`, `error`, `completed`.
   - `context` payload（包括初始快照 event_id=0）始终包含 `session_id` 与 `trace_id`，字段形状与前端 `InterviewStreamContext` 对齐。
   - Reconnect with header `Last-Event-ID` to resume from last received event id.
@@ -80,7 +80,7 @@ All subsequent endpoints require `Authorization: Bearer <token>` header.
   - Returns metadata: `uploaded_at`, `original_filename`, `stored_path`, `trace_id`.
 
 - `POST /knowledge/upload-material` (`multipart/form-data`)
-  - Fields: `username`, `files` (multiple), `display_name` (optional), `material_context` (optional), `skip_processing` (optional bool)
+  - Fields: `username`, `files` (multiple), `display_name` (optional), `material_context` (optional), `skip_processing` (optional bool), `material_type` (optional: `"document" | "interview"`, default `"document"`)
   - Batch upload with optional immediate knowledge extraction.
   - Success data: `{ "items": [...], "total_files": N, "success_count": N }`
   - Each item: `{ "file_name", "status": "success"|"error", "material_id", "events_count", "error_message" }`
@@ -164,6 +164,17 @@ All subsequent endpoints require `Authorization: Bearer <token>` header.
 - On SSE `error`:
   - `retryable=true`: show retry CTA
   - `retryable=false`: show corrective guidance and stop retry loop
+
+## Frontend Query Keys
+
+统一定义于 `frontend/lib/query-keys.ts`：
+
+- `knowledge.events`
+- `knowledge.profiles`
+- `knowledge.materials`
+- `knowledge.materialContent(materialId)`
+
+建议所有查询与失效统一引用该文件，避免 hardcode key 漂移。
 
 ## Retry Strategy
 - HTTP errors:

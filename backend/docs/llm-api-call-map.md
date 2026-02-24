@@ -4,6 +4,21 @@
 
 ---
 
+## 当前 API ↔ Workflow 对应（简版）
+
+- `POST /api/v1/knowledge/upload-material` / `POST /api/v1/knowledge/materials/{id}/reprocess`
+  - 触发 Knowledge workflow（`ingest -> extract -> vectorize -> finalize`）
+- `GET /api/v1/knowledge/materials/{id}/events`（SSE）
+  - 订阅 Knowledge workflow 阶段进度
+- `POST /api/v1/session/{id}/message` / `POST /api/v1/session/{id}/flush`
+  - 触发 Interview workflow 的上下文构建与刷新
+- `GET /api/v1/session/{id}/events`（SSE）
+  - 订阅 Interview workflow 的实时状态与上下文事件
+- `POST /api/v1/generate/timeline` / `POST /api/v1/generate/memoir`
+  - 触发 Generate workflow
+
+---
+
 ## 一、怎么看 AI 调用日志
 
 每次 AI 被调用，系统都会自动在 `.log/API_calls/` 目录下写一个 `.txt` 文件，以人类可读的纯文本格式记录完整的问答内容。
@@ -200,14 +215,14 @@ flowchart TB
 
 #### 六个存储组件详解
 
-| # | 组件 | 数据结构 | 容量限制 | 写入时机 | 读取时机 |
-|---|------|----------|----------|----------|----------|
-| ① | **对话缓冲区** | FIFO 队列 (`deque`) | 最多 20 轮 | 每收到一条消息 | N 轮刷新时读取全部对话 |
-| ② | **临时仓库** | 动态列表 + 字符计数器 | 800 字触发 mark-and-drain | 缓冲区挤出旧对话时 | mark-and-drain 异步摘要时 |
-| ③ | **摘要队列** | FIFO 循环队列 | 最多 5 批 × 16 条 | AI 提取完毕后入队 | N 轮刷新时读取全部历史摘要 |
-| ④ | **待深入事件** | 动态列表 + 自增 ID | 无上限 | 预热时批量添加；N 轮刷新时更新已探索内容 | N 轮刷新时读取；推送给前端 |
-| ⑤ | **事件补充** | 列表（每次整体替换） | 最新一批 ≤8 条 | 预热 / N 轮刷新生成后替换 | 推送给前端 |
-| ⑥ | **情感锚点** | 两个列表（每次整体替换） | 正向 3-5 + 敏感 2-4 | 预热 / N 轮刷新生成后替换 | 推送给前端 |
+| #   | 组件           | 数据结构                 | 容量限制                  | 写入时机                                 | 读取时机                   |
+| --- | -------------- | ------------------------ | ------------------------- | ---------------------------------------- | -------------------------- |
+| ①   | **对话缓冲区** | FIFO 队列 (`deque`)      | 最多 20 轮                | 每收到一条消息                           | N 轮刷新时读取全部对话     |
+| ②   | **临时仓库**   | 动态列表 + 字符计数器    | 800 字触发 mark-and-drain | 缓冲区挤出旧对话时                       | mark-and-drain 异步摘要时  |
+| ③   | **摘要队列**   | FIFO 循环队列            | 最多 5 批 × 16 条         | AI 提取完毕后入队                        | N 轮刷新时读取全部历史摘要 |
+| ④   | **待深入事件** | 动态列表 + 自增 ID       | 无上限                    | 预热时批量添加；N 轮刷新时更新已探索内容 | N 轮刷新时读取；推送给前端 |
+| ⑤   | **事件补充**   | 列表（每次整体替换）     | 最新一批 ≤8 条            | 预热 / N 轮刷新生成后替换                | 推送给前端                 |
+| ⑥   | **情感锚点**   | 两个列表（每次整体替换） | 正向 3-5 + 敏感 2-4       | 预热 / N 轮刷新生成后替换                | 推送给前端                 |
 
 #### 对话双层缓冲详细说明
 
@@ -518,12 +533,12 @@ flowchart LR
 
 **模型配置**（在 `.env` 中设置，详见 `.env.example`）：
 
-| 环境变量 | 默认值 | 角色 |
-| --- | --- | --- |
-| `LLM_CONVERSATION_MODEL` | `deepseek/deepseek-v3.2-251201` | 采访实时分析 |
-| `LLM_EXTRACTION_MODEL` | `deepseek/deepseek-v3.2-251201` | 知识库提取+精炼 |
-| `LLM_CREATIVE_MODEL` | `claude-3.7-sonnet` | 回忆录+时间轴写作 |
-| `LLM_UTILITY_MODEL` | `deepseek/deepseek-v3.2-251201` | JSON修复等机械任务 |
+| 环境变量                 | 默认值                          | 角色               |
+| ------------------------ | ------------------------------- | ------------------ |
+| `LLM_CONVERSATION_MODEL` | `deepseek/deepseek-v3.2-251201` | 采访实时分析       |
+| `LLM_EXTRACTION_MODEL`   | `deepseek/deepseek-v3.2-251201` | 知识库提取+精炼    |
+| `LLM_CREATIVE_MODEL`     | `claude-3.7-sonnet`             | 回忆录+时间轴写作  |
+| `LLM_UTILITY_MODEL`      | `deepseek/deepseek-v3.2-251201` | JSON修复等机械任务 |
 
 **全部调用点**：
 
