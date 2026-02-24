@@ -83,15 +83,19 @@ npm run dev
 - **打开浏览器访问 `http://localhost:3000` 即可访问。**
 - 可以新建一个用户命名为 `测试用户`，然后从 [网盘](https://disk.pku.edu.cn/link/AA08A32540A67143FFA3DE91C17DEB9456) 下载测试数据，上传到服务进行结构化
 
-## 开发检查（Backend）
+## 开发检查
 
 在仓库根目录执行：
 
 ```bash
+# 低负载日常检查（推荐，前端+后端关键回归）
+./scripts/check_quick.sh
+
+# 后端完整检查
 ./scripts/check_backend.sh
 ```
 
-该命令会统一执行：
+其中后端完整检查会执行：
 
 - `ruff check --select E,F --ignore E501 tests`
 - `mypy --ignore-missing-imports --follow-imports=skip tests`

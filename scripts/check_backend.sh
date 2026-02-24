@@ -11,12 +11,26 @@ if [[ ! -x .venv/bin/python ]]; then
   uv venv
 fi
 
-echo "[check-backend] 安装运行与检查依赖..."
-uv pip install --python .venv/bin/python \
-  fastapi uvicorn pydantic pydantic-settings \
-  langgraph google-genai sqlite-vec httpx \
-  python-jose[cryptography] passlib[bcrypt] python-dotenv python-multipart \
-  pytest ruff mypy
+if ! .venv/bin/python - <<'PY'
+import importlib
+mods = [
+  'fastapi','uvicorn','pydantic','pydantic_settings','langgraph','google.genai',
+  'sqlite_vec','httpx','jose','passlib','dotenv','pytest','ruff','mypy'
+]
+for m in mods:
+    importlib.import_module(m)
+print('ok')
+PY
+then
+  echo "[check-backend] 安装运行与检查依赖..."
+  uv pip install --python .venv/bin/python \
+    fastapi uvicorn pydantic pydantic-settings \
+    langgraph google-genai sqlite-vec httpx \
+    python-jose[cryptography] passlib[bcrypt] python-dotenv python-multipart \
+    pytest ruff mypy
+else
+  echo "[check-backend] 依赖已就绪，跳过安装"
+fi
 
 echo "[check-backend] ruff (tests: E/F only)"
 .venv/bin/ruff check --select E,F --ignore E501 tests
