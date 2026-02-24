@@ -8,11 +8,8 @@ import { useWorkspaceContext } from "@/lib/workspace/context";
 import type { EventSupplementItem, PendingEventDetail } from "@/lib/api/types";
 import { togglePendingEventPriority } from "@/lib/api/interview";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { BackgroundSupplementPanel } from "./background-supplement-panel";
-import { EmotionalAnchorsPanel } from "./emotional-anchors-panel";
-import { PendingEventsPanel } from "./pending-events-panel";
+import { InterviewSidePanels } from "./interview-side-panels";
 import { VoiceRecordPanel } from "./voice-record-panel";
 
 type SpeakerRole = "interviewer" | "interviewee";
@@ -386,31 +383,19 @@ export function InterviewPage() {
         </div>
 
         {/* RIGHT: three-panel assist area */}
-        <div className="grid flex-1 grid-cols-2 grid-rows-2 gap-4 overflow-hidden p-6">
-          <Card className="row-span-2 min-h-0 overflow-hidden p-5">
-            {isConnected && !supplementsLoaded ? (
-              <div className="flex h-full items-center justify-center text-xs text-slate-400">加载中…</div>
-            ) : (
-              <BackgroundSupplementPanel supplements={supplements} />
-            )}
-          </Card>
-
-          <Card className="min-h-0 overflow-hidden p-5">
-            {isConnected && !pendingEventsLoaded ? (
-              <div className="flex h-full items-center justify-center text-xs text-slate-400">加载中…</div>
-            ) : (
-              <PendingEventsPanel events={pendingEvents} expandedIds={expandedIds} onToggle={handleToggle} onTogglePriority={handleTogglePriority} />
-            )}
-          </Card>
-
-          <Card className="min-h-0 overflow-hidden p-5">
-            {isConnected && !anchorsLoaded ? (
-              <div className="flex h-full items-center justify-center text-xs text-slate-400">加载中…</div>
-            ) : (
-              <EmotionalAnchorsPanel positiveTriggers={positiveTriggers} sensitiveTopics={sensitiveTopics} />
-            )}
-          </Card>
-        </div>
+        <InterviewSidePanels
+          isConnected={isConnected}
+          supplementsLoaded={supplementsLoaded}
+          pendingEventsLoaded={pendingEventsLoaded}
+          anchorsLoaded={anchorsLoaded}
+          supplements={supplements}
+          pendingEvents={pendingEvents}
+          expandedIds={expandedIds}
+          positiveTriggers={positiveTriggers}
+          sensitiveTopics={sensitiveTopics}
+          onToggle={handleToggle}
+          onTogglePriority={handleTogglePriority}
+        />
       </div>
     </main>
   );

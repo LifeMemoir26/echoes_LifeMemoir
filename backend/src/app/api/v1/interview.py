@@ -11,15 +11,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
 
-from src.application.interview.session import (
-    add_dialogue_streaming,
-    create_interview_session,
-    reset_interview_session,
-    _bootstrap_pending_events,
-    _bootstrap_supplements_bg,
-    _bootstrap_anchors_bg,
-)
-from src.core.config import get_settings
+from src.application.interview.session import reset_interview_session
+from src.application.interview.session_app_service import InterviewSessionAppService
 
 from .deps import get_current_username
 from .errors import build_error, error_response
@@ -31,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+_service = InterviewSessionAppService(registry)
 HEARTBEAT_SECONDS = 15
 IDLE_TIMEOUT_SECONDS = 300
 
@@ -316,8 +310,8 @@ async def create_session(
             trace_id=trace_id,
         )
 
-    existing = await registry.get_active_by_username(username)
-    if existing is not None:
+    record, conflict_or_existing, trace_id, _ = await _service.create_session(username)
+    if conflict_or_existing is not None:
         return ApiResponse(
             status="failed",
             data=None,
@@ -327,81 +321,20 @@ async def create_session(
                     error_message="active session already exists for username",
                     retryable=False,
                     trace_id=trace_id,
-                    error_details={"existing_session_id": existing.session_id},
+                    error_details={"existing_session_id": conflict_or_existing.session_id},
                 ),
                 build_error(
                     error_code="SESSION_RECOVERABLE",
-                    error_message=f"existing session_id={existing.session_id}",
+                    error_message=f"existing session_id={conflict_or_existing.session_id}",
                     retryable=False,
                     trace_id=trace_id,
-                    error_details={"existing_session_id": existing.session_id},
-                ),
-            ],
-        )
-
-    interview_session = await create_interview_session(username=username)
-    session_id = f"sess-{uuid.uuid4().hex[:12]}"
-    record, conflict = await registry.create(
-        username=username,
-        session_id=session_id,
-        thread_id=interview_session.thread_id,
-        interview_session=interview_session,
-    )
-    if conflict is not None:
-        error = build_error(
-            error_code="SESSION_CONFLICT",
-            error_message="active session already exists for username",
-            retryable=False,
-            trace_id=trace_id,
-            error_details={"existing_session_id": conflict.session_id},
-        )
-        return ApiResponse(
-            status="failed",
-            data=None,
-            errors=[
-                error,
-                build_error(
-                    error_code="SESSION_RECOVERABLE",
-                    error_message=f"existing session_id={conflict.session_id}",
-                    retryable=False,
-                    trace_id=trace_id,
-                    error_details={"existing_session_id": conflict.session_id},
+                    error_details={"existing_session_id": conflict_or_existing.session_id},
                 ),
             ],
         )
 
     if record is None:
-        raise error_response(
-            status_code=500,
-            error_code="SESSION_CREATE_FAILED",
-            error_message="failed to create session record",
-            trace_id=trace_id,
-            retryable=True,
-        )
-
-    await registry.publish(
-        record.session_id,
-        "status",
-        {
-            "trace_id": record.thread_id,
-            "status": "created",
-            "username": username,
-            "created_at": record.created_at.isoformat(),
-        },
-    )
-
-    # 三并发 bootstrap：各自完成后独立推 SSE
-    _bs_trace = record.thread_id
-
-    async def _run_bootstrap() -> None:
-        await asyncio.gather(
-            _bootstrap_pending_events(interview_session, record.session_id, _bs_trace),
-            _bootstrap_supplements_bg(interview_session, record.session_id, _bs_trace),
-            _bootstrap_anchors_bg(interview_session, record.session_id, _bs_trace),
-            return_exceptions=True,
-        )
-
-    asyncio.create_task(_run_bootstrap())
+        raise error_response(500, "SESSION_CREATE_FAILED", "failed to create session record", trace_id, retryable=True)
 
     return ApiResponse(
         status="success",
@@ -447,7 +380,7 @@ async def send_message(
             "at": iso_now(),
         },
     )
-    asyncio.create_task(_process_message_bg(record, session_id, payload, trace_id))
+    asyncio.create_task(_service.process_message_bg(record, session_id, payload.speaker, payload.content, payload.timestamp, trace_id))
 
     return ApiResponse(
         status="success",
@@ -488,7 +421,7 @@ async def flush_session(
         "status",
         {"trace_id": trace_id, "status": "flushing", "at": iso_now()},
     )
-    asyncio.create_task(_process_flush_bg(record, session_id, trace_id))
+    asyncio.create_task(_service.process_flush_bg(record, session_id, trace_id))
 
     return ApiResponse(
         status="success",

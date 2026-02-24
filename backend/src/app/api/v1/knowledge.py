@@ -17,13 +17,10 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
 
 from src.application.knowledge.api import process_knowledge_file
-from src.application.workflows.knowledge.workflow import run_knowledge_file_stream
+from src.application.knowledge.query_service import KnowledgeQueryService
 from src.core.paths import get_data_root
-from src.infra.database.sqlite_client import SQLiteClient
-from src.infra.database.store.chunk_store import ChunkStore
 
 from .material_registry import material_registry
-from src.infra.storage.material_store import MaterialStore
 
 from .deps import get_current_username
 from .errors import error_response, new_trace_id, normalize_workflow_failure
@@ -44,6 +41,7 @@ from .models import (
 
 
 router = APIRouter()
+_service = KnowledgeQueryService()
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _ALLOWED_SUFFIX = {".txt", ".md", ".markdown"}
 _ALLOWED_MIME_PREFIX = ("text/",)
@@ -210,20 +208,7 @@ async def process_knowledge_upload(
 async def list_records(
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[RecordsListData]:
-    store = ChunkStore(username=current_username)
-    rows = store.get_all_chunks_with_status()
-    records = [
-        RecordItem(
-            chunk_id=row.chunk_id,
-            chunk_source=row.chunk_source,
-            preview=row.chunk_text[:120],
-            total_chars=len(row.chunk_text),
-            chunk_index=row.chunk_index,
-            created_at=row.created_at,
-            is_structured=row.is_structured,
-        )
-        for row in rows
-    ]
+    records = [RecordItem(**row) for row in _service.list_records(current_username)]
     return ApiResponse(status="success", data=RecordsListData(records=records))
 
 
@@ -231,24 +216,7 @@ async def list_records(
 async def list_events(
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[EventsListData]:
-    client = SQLiteClient(username=current_username)
-    rows = client.get_all_events(sort_by_year=True)
-    events = [
-        EventItem(
-            id=row.id,
-            year=row.year,
-            time_detail=row.time_detail,
-            event_summary=row.event_summary,
-            event_details=row.event_details,
-            is_merged=row.is_merged,
-            created_at=row.created_at or "",
-            life_stage=row.life_stage,
-            event_category=row.event_category,
-            confidence=row.confidence,
-            source_material_id=row.source_material_id,
-        )
-        for row in rows
-    ]
+    events = [EventItem(**row) for row in _service.list_events(current_username)]
     return ApiResponse(status="success", data=EventsListData(events=events))
 
 
@@ -256,12 +224,7 @@ async def list_events(
 async def get_profiles(
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[ProfileData]:
-    client = SQLiteClient(username=current_username)
-    profile = client.get_character_profile()
-    data = ProfileData(
-        personality=profile.personality if profile else "",
-        worldview=profile.worldview if profile else "",
-    )
+    data = ProfileData(**_service.get_profile(current_username))
     return ApiResponse(status="success", data=data)
 
 
@@ -300,116 +263,17 @@ async def upload_material(
             trace_id=trace_id,
         )
 
-    data_root = get_data_root()
-    material_store = MaterialStore(data_base_dir=data_root)
-    db_client = SQLiteClient(username=safe_username)
-
-    items: list[MaterialUploadItem] = []
-    success_count = 0
-
-    for upload in files:
-        if not upload.filename:
-            items.append(MaterialUploadItem(
-                file_name="<unknown>",
-                status="error",
-                error_message="missing filename",
-            ))
-            continue
-
-        if not _is_allowed_file(upload):
-            items.append(MaterialUploadItem(
-                file_name=upload.filename,
-                status="error",
-                error_message="unsupported file type (only .txt / .md)",
-            ))
-            continue
-
-        content = await upload.read()
-        if len(content) > _MAX_UPLOAD_BYTES:
-            items.append(MaterialUploadItem(
-                file_name=upload.filename,
-                status="error",
-                error_message=f"file exceeds {_MAX_UPLOAD_BYTES} bytes",
-            ))
-            continue
-
-        try:
-            material_id, rel_path = material_store.save_file(
-                username=safe_username,
-                filename=upload.filename,
-                content_bytes=content,
-                material_type=material_type,
-                display_name=display_name,
-            )
-            db_client.insert_material(
-                material_id=material_id,
-                filename=upload.filename,
-                material_type=material_type,
-                material_context=material_context,
-                file_path=rel_path,
-                file_size=len(content),
-                display_name=display_name,
-                initial_status="pending" if skip_processing else "processing",
-            )
-
-            if skip_processing:
-                # 仅保存文件，不触发知识提取 — 状态保持 pending
-                success_count += 1
-                items.append(MaterialUploadItem(
-                    file_name=upload.filename,
-                    status="success",
-                    material_id=material_id,
-                    events_count=0,
-                ))
-            else:
-                # 触发知识提取工作流（串行，避免并发过高）
-                stored_path = (data_root / safe_username / rel_path).resolve()
-                result = await process_knowledge_file(
-                    file_path=stored_path,
-                    username=safe_username,
-                    data_base_dir=data_root,
-                    material_type=material_type,
-                    material_context=material_context,
-                    material_id=material_id,
-                )
-
-                if result.get("status") == "failed":
-                    db_client.update_material_status(
-                        material_id=material_id,
-                        status="failed",
-                    )
-                    items.append(MaterialUploadItem(
-                        file_name=upload.filename,
-                        status="error",
-                        material_id=material_id,
-                        error_message="knowledge workflow failed",
-                    ))
-                else:
-                    kg = result.get("knowledge_graph", {})
-                    events_count = kg.get("events_count", 0)
-                    success_count += 1
-                    items.append(MaterialUploadItem(
-                        file_name=upload.filename,
-                        status="success",
-                        material_id=material_id,
-                        events_count=events_count,
-                    ))
-
-        except Exception as exc:
-            items.append(MaterialUploadItem(
-                file_name=upload.filename,
-                status="error",
-                error_message=str(exc),
-            ))
-
-    return ApiResponse(
-        status="success",
-        data=MaterialUploadData(
-            items=items,
-            total_files=len(files),
-            success_count=success_count,
-        ),
+    result = await _service.upload_materials(
+        username=safe_username,
+        files=files,
+        max_upload_bytes=_MAX_UPLOAD_BYTES,
+        is_allowed_file=_is_allowed_file,
+        display_name=display_name,
+        material_context=material_context,
+        material_type=material_type,
+        skip_processing=skip_processing,
     )
+    return ApiResponse(status="success", data=MaterialUploadData(items=[MaterialUploadItem(**i) for i in result["items"]], total_files=result["total_files"], success_count=result["success_count"]))
 
 
 @router.get("/knowledge/materials", response_model=ApiResponse[MaterialsListData])
@@ -417,26 +281,7 @@ async def list_materials(
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[MaterialsListData]:
     """返回当前用户的所有 materials 记录。"""
-    db_client = SQLiteClient(username=current_username)
-
-    rows = db_client.get_all_materials()
-    materials = [
-        MaterialItem(
-            id=row["id"],
-            filename=row["filename"],
-            display_name=row.get("display_name", ""),
-            material_type=row["material_type"],
-            material_context=row.get("material_context", ""),
-            file_path=row.get("file_path"),
-            file_size=row.get("file_size", 0),
-            status=row["status"],
-            events_count=row.get("events_count", 0),
-            chunks_count=row.get("chunks_count", 0),
-            uploaded_at=str(row["uploaded_at"]),
-            processed_at=str(row["processed_at"]) if row.get("processed_at") else None,
-        )
-        for row in rows
-    ]
+    materials = [MaterialItem(**row) for row in _service.list_materials(current_username)]
     return ApiResponse(status="success", data=MaterialsListData(materials=materials))
 
 
@@ -447,33 +292,16 @@ async def get_material_content(
 ) -> ApiResponse[dict]:
     """返回指定 material 的原始文件文本内容。"""
     trace_id = new_trace_id("material-content")
-    db_client = SQLiteClient(username=current_username)
-    rows = db_client.get_all_materials()
-    row = next((r for r in rows if r["id"] == material_id), None)
+    row = _service.get_material(current_username, material_id)
     if not row:
-        raise error_response(
-            status_code=404,
-            error_code="MATERIAL_NOT_FOUND",
-            error_message=f"material {material_id} not found",
-            trace_id=trace_id,
-        )
+        raise error_response(404, "MATERIAL_NOT_FOUND", f"material {material_id} not found", trace_id)
     file_path: str | None = row.get("file_path")
     if not file_path:
-        raise error_response(
-            status_code=404,
-            error_code="MATERIAL_FILE_MISSING",
-            error_message="material has no associated file path",
-            trace_id=trace_id,
-        )
-    full_path = (get_data_root() / current_username / file_path).resolve()
-    if not full_path.exists():
-        raise error_response(
-            status_code=404,
-            error_code="MATERIAL_FILE_MISSING",
-            error_message="material file not found on disk",
-            trace_id=trace_id,
-        )
-    content = full_path.read_text(encoding="utf-8", errors="replace")
+        raise error_response(404, "MATERIAL_FILE_MISSING", "material has no associated file path", trace_id)
+    try:
+        content = _service.read_material_content(current_username, file_path)
+    except FileNotFoundError:
+        raise error_response(404, "MATERIAL_FILE_MISSING", "material file not found on disk", trace_id)
     return ApiResponse(status="success", data={"content": content})
 
 
@@ -484,39 +312,12 @@ async def delete_material(
 ) -> ApiResponse[dict]:
     """删除指定 material 及其关联的事件、侧写、chunks。"""
     trace_id = new_trace_id("delete-material")
-    db_client = SQLiteClient(username=current_username)
-    row = db_client.get_material_by_id(material_id)
+    row = _service.get_material(current_username, material_id)
     if not row:
-        raise error_response(
-            status_code=404,
-            error_code="MATERIAL_NOT_FOUND",
-            error_message=f"material {material_id} not found",
-            trace_id=trace_id,
-        )
-
+        raise error_response(404, "MATERIAL_NOT_FOUND", f"material {material_id} not found", trace_id)
     if material_registry.is_active(material_id):
-        raise error_response(
-            status_code=409,
-            error_code="MATERIAL_PROCESSING",
-            error_message="无法删除正在处理的素材",
-            trace_id=trace_id,
-        )
-
-    # 删除磁盘文件
-    file_path_rel: str | None = row.get("file_path")
-    if file_path_rel:
-        full_path = (get_data_root() / current_username / file_path_rel).resolve()
-        if full_path.exists():
-            full_path.unlink(missing_ok=True)
-
-    # 删除关联 chunks（通过 filename 匹配 chunk_source）
-    chunk_store = ChunkStore(username=current_username)
-    filename = row.get("filename", "")
-    if filename:
-        chunk_store.delete_chunks_by_source(filename)
-
-    # 删除 DB 记录（events、profiles、material 本身）
-    db_client.delete_material(material_id)
+        raise error_response(409, "MATERIAL_PROCESSING", "无法删除正在处理的素材", trace_id)
+    _service.delete_material(current_username, material_id)
 
     return ApiResponse(status="success", data={"material_id": material_id})
 
@@ -628,55 +429,14 @@ async def reprocess_material(
 ) -> ApiResponse[dict]:
     """Trigger re-structuring workflow for a material file. Returns immediately; progress via SSE."""
     trace_id = new_trace_id("reprocess")
-    db_client = SQLiteClient(username=current_username)
-    row = db_client.get_material_by_id(material_id)
-    if not row:
-        raise error_response(
-            status_code=404,
-            error_code="MATERIAL_NOT_FOUND",
-            error_message=f"material {material_id} not found",
-            trace_id=trace_id,
-        )
-
-    file_path_rel: str | None = row.get("file_path")
-    if not file_path_rel:
-        raise error_response(
-            status_code=404,
-            error_code="MATERIAL_FILE_MISSING",
-            error_message="material has no associated file path",
-            trace_id=trace_id,
-        )
-    full_path = (get_data_root() / current_username / file_path_rel).resolve()
-    if not full_path.exists():
-        raise error_response(
-            status_code=404,
-            error_code="MATERIAL_FILE_MISSING",
-            error_message="material file not found on disk",
-            trace_id=trace_id,
-        )
-
-    if material_registry.is_active(material_id):
-        raise error_response(
-            status_code=409,
-            error_code="MATERIAL_ALREADY_PROCESSING",
-            error_message="material is already being processed",
-            trace_id=trace_id,
-        )
-
-    db_client.update_material_status(material_id=material_id, status="processing")
-    await material_registry.create(material_id)
-
-    task = asyncio.create_task(
-        _reprocess_bg(
-            material_id=material_id,
-            file_path=full_path,
-            username=current_username,
-            material_context=row.get("material_context", ""),
-            material_type=row.get("material_type", "document"),
-            trace_id=trace_id,
-        )
-    )
-    material_registry.register_task(material_id, task)
+    ok, reason = await _service.start_reprocess(material_id, current_username, material_registry, trace_id)
+    if not ok:
+        if reason == "MATERIAL_NOT_FOUND":
+            raise error_response(404, "MATERIAL_NOT_FOUND", f"material {material_id} not found", trace_id)
+        if reason == "MATERIAL_FILE_MISSING":
+            raise error_response(404, "MATERIAL_FILE_MISSING", "material file not found on disk", trace_id)
+        if reason == "MATERIAL_ALREADY_PROCESSING":
+            raise error_response(409, "MATERIAL_ALREADY_PROCESSING", "material is already being processed", trace_id)
 
     return ApiResponse(status="success", data={"material_id": material_id, "trace_id": trace_id})
 
@@ -688,21 +448,12 @@ async def cancel_material_processing(
 ) -> ApiResponse[dict]:
     """取消正在进行的结构化任务，将状态重置为 pending。"""
     trace_id = new_trace_id("cancel-material")
-    db_client = SQLiteClient(username=current_username)
-    row = db_client.get_material_by_id(material_id)
-    if not row:
-        raise error_response(
-            status_code=404,
-            error_code="MATERIAL_NOT_FOUND",
-            error_message=f"material {material_id} not found",
-            trace_id=trace_id,
-        )
+    exists = await _service.cancel_material(current_username, material_id)
+    if not exists:
+        raise error_response(404, "MATERIAL_NOT_FOUND", f"material {material_id} not found", trace_id)
 
     was_active = await material_registry.cancel_task(material_id)
     await material_registry.cleanup(material_id)
-
-    # Reset to pending so the user can re-trigger later
-    db_client.update_material_status(material_id=material_id, status="pending")
 
     return ApiResponse(status="success", data={"material_id": material_id, "was_active": was_active})
 
