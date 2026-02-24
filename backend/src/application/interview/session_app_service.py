@@ -16,6 +16,7 @@ from src.application.interview.session import (
     reset_interview_session,
 )
 from src.core.config import get_settings
+from src.domain.session_status import is_terminal_session_status
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ class InterviewSessionAppService:
                     yield {"event": evt.event, "event_id": evt.event_id, "payload": payload}
                     if evt.event == "completed" and isinstance(evt.payload, dict):
                         status = str(evt.payload.get("status", ""))
-                        if status in {"session_closed", "idle_timeout"}:
+                        if is_terminal_session_status(status):
                             break
                 except TimeoutError:
                     latest = await self.registry.get(session_id)

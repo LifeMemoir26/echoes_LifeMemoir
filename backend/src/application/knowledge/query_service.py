@@ -11,6 +11,7 @@ from src.application.knowledge.api import process_knowledge_file
 from src.application.workflows import WorkflowFacade
 from src.application.workflows.knowledge.workflow import run_knowledge_file_stream
 from src.core.paths import get_data_root
+from src.domain.material_status import MaterialLifecycle
 from src.infra.database.sqlite_client import SQLiteClient
 from src.infra.database.store.chunk_store import ChunkStore
 from src.infra.storage.material_store import MaterialStore
@@ -184,7 +185,7 @@ class KnowledgeQueryService:
                     file_path=rel_path,
                     file_size=len(content),
                     display_name=display_name,
-                    initial_status="pending" if skip_processing else "processing",
+                    initial_status=MaterialLifecycle.initial_status(skip_processing=skip_processing),
                 )
 
                 if skip_processing:
@@ -201,7 +202,10 @@ class KnowledgeQueryService:
                         material_id=material_id,
                     )
                     if result.get("status") == "failed":
-                        db_client.update_material_status(material_id=material_id, status="failed")
+                        db_client.update_material_status(
+                            material_id=material_id,
+                            status=MaterialLifecycle.failed_status(),
+                        )
                         items.append({"file_name": upload.filename, "status": "error", "material_id": material_id, "error_message": "knowledge workflow failed"})
                     else:
                         events_count = result.get("knowledge_graph", {}).get("events_count", 0)
@@ -262,7 +266,10 @@ class KnowledgeQueryService:
         row = db_client.get_material_by_id(material_id)
         if not row:
             return False
-        db_client.update_material_status(material_id=material_id, status="pending")
+        db_client.update_material_status(
+            material_id=material_id,
+            status=MaterialLifecycle.cancel_target_status(current_status=str(row.get("status", ""))),
+        )
         return True
 
     async def start_reprocess(self, material_id: str, username: str, material_registry: Any, trace_id: str) -> tuple[bool, str]:
@@ -276,10 +283,17 @@ class KnowledgeQueryService:
         full_path = (get_data_root() / username / file_path_rel).resolve()
         if not full_path.exists():
             return False, "MATERIAL_FILE_MISSING"
-        if material_registry.is_active(material_id):
+        current_status = str(row.get("status", ""))
+        if not MaterialLifecycle.can_start_reprocess(
+            current_status=current_status,
+            is_active=material_registry.is_active(material_id),
+        ):
             return False, "MATERIAL_ALREADY_PROCESSING"
 
-        db_client.update_material_status(material_id=material_id, status="processing")
+        db_client.update_material_status(
+            material_id=material_id,
+            status=MaterialLifecycle.processing_status(),
+        )
         await material_registry.create(material_id)
         task = asyncio.create_task(self._reprocess_bg(material_id, full_path, username, row.get("material_context", ""), row.get("material_type", "document"), trace_id, material_registry))
         material_registry.register_task(material_id, task)
@@ -303,7 +317,10 @@ class KnowledgeQueryService:
                 output: dict[str, Any] = chunk.get("output", {})
                 if output.get("status") == "failed":
                     await material_registry.publish(material_id, "error", {"stage": node_name, "message": str(output.get("errors", "unknown error")), "at": datetime.now(timezone.utc).isoformat()})
-                    db_client.update_material_status(material_id=material_id, status="failed")
+                    db_client.update_material_status(
+                        material_id=material_id,
+                        status=MaterialLifecycle.failed_status(),
+                    )
                     return
                 await material_registry.publish(material_id, "status", {"stage": node_name, "label": _STAGE_LABELS.get(node_name, node_name), "at": datetime.now(timezone.utc).isoformat()})
 
@@ -311,11 +328,19 @@ class KnowledgeQueryService:
             events_count = row.get("events_count", 0) if row else 0
             chunks_count = row.get("chunks_count", 0) if row else 0
             await material_registry.publish(material_id, "completed", {"events_count": events_count, "chunks_count": chunks_count, "at": datetime.now(timezone.utc).isoformat()})
-            db_client.update_material_status(material_id=material_id, status="done", events_count=events_count, chunks_count=chunks_count)
+            db_client.update_material_status(
+                material_id=material_id,
+                status=MaterialLifecycle.completed_status(),
+                events_count=events_count,
+                chunks_count=chunks_count,
+            )
         except Exception as exc:
             logger.error("_reprocess_bg failed for material %s: %s", material_id, exc, exc_info=True)
             await material_registry.publish(material_id, "error", {"stage": "unknown", "message": str(exc), "at": datetime.now(timezone.utc).isoformat()})
-            db_client.update_material_status(material_id=material_id, status="failed")
+            db_client.update_material_status(
+                material_id=material_id,
+                status=MaterialLifecycle.failed_status(),
+            )
         finally:
             facade.close()
             await material_registry.cleanup(material_id)
