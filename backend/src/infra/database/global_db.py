@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -26,9 +27,17 @@ class GlobalDB:
         data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = data_dir / "app.db"
 
+        self._lock = threading.RLock()
         try:
-            self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self.conn = sqlite3.connect(
+                str(self.db_path),
+                check_same_thread=False,
+                timeout=30.0,
+            )
             self.conn.row_factory = sqlite3.Row
+            with self._lock:
+                self.conn.execute("PRAGMA journal_mode=WAL")
+                self.conn.execute("PRAGMA busy_timeout=30000")
             self._create_tables()
             logger.info(f"GlobalDB connected: {self.db_path}")
         except Exception as exc:
@@ -36,20 +45,21 @@ class GlobalDB:
             raise
 
     def _create_tables(self) -> None:
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                username      TEXT    NOT NULL UNIQUE,
-                password_hash TEXT    NOT NULL,
-                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_login_at TIMESTAMP
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username      TEXT    NOT NULL UNIQUE,
+                    password_hash TEXT    NOT NULL,
+                    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login_at TIMESTAMP
+                )
+            """)
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)"
             )
-        """)
-        cursor.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)"
-        )
-        self.conn.commit()
+            self.conn.commit()
 
     # ------------------------------------------------------------------
     # Write helpers
@@ -57,38 +67,42 @@ class GlobalDB:
 
     def create_user(self, username: str, password_hash: str) -> int:
         """Insert a new user row and return the new id."""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-            (username, password_hash),
-        )
-        self.conn.commit()
-        return cursor.lastrowid  # type: ignore[return-value]
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                (username, password_hash),
+            )
+            self.conn.commit()
+            return cursor.lastrowid  # type: ignore[return-value]
 
     def update_last_login(self, username: str) -> None:
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE username = ?",
-            (username,),
-        )
-        self.conn.commit()
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE username = ?",
+                (username,),
+            )
+            self.conn.commit()
 
     # ------------------------------------------------------------------
     # Read helpers
     # ------------------------------------------------------------------
 
     def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def username_exists(self, username: str) -> bool:
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM users WHERE username = ? LIMIT 1", (username,)
-        )
-        return cursor.fetchone() is not None
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM users WHERE username = ? LIMIT 1", (username,)
+            )
+            return cursor.fetchone() is not None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -96,7 +110,8 @@ class GlobalDB:
 
     def close(self) -> None:
         if hasattr(self, "conn"):
-            self.conn.close()
+            with self._lock:
+                self.conn.close()
 
     def __enter__(self) -> "GlobalDB":
         return self

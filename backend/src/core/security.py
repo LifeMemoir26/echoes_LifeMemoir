@@ -15,12 +15,18 @@ logger = logging.getLogger(__name__)
 _DEFAULT_EXPIRE_HOURS = 24
 _ALGORITHM = "HS256"
 
+_ENV = os.environ.get("ECHOES_ENV", os.environ.get("APP_ENV", "development")).lower()
+_IS_PROD = _ENV in {"prod", "production"}
+
 _JWT_SECRET: Optional[str] = os.environ.get("JWT_SECRET_KEY")
 if not _JWT_SECRET:
+    if _IS_PROD:
+        raise RuntimeError("JWT_SECRET_KEY must be set when running in production environment")
+
     _JWT_SECRET = "dev-insecure-secret-change-me-in-production"
     logger.warning(
         "JWT_SECRET_KEY env var is not set. "
-        "Using insecure default — set the variable before deploying."
+        "Using insecure default for non-production only."
     )
 
 
