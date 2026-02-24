@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.app.api import v1_router
+from src.app.api.v1.errors import build_error, new_trace_id
+from src.app.api.v1.models import ApiResponse
 
 
 app = FastAPI(title="Echoes LifeMemoir API", version="1.0.0")
@@ -30,23 +34,27 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+logger = logging.getLogger(__name__)
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    return JSONResponse(
-        status_code=500,
-        content={
-            "status": "failed",
-            "data": None,
-            "errors": [
-                {
-                    "error_code": "UNHANDLED_EXCEPTION",
-                    "error_message": str(exc),
-                    "retryable": False,
-                    "trace_id": f"http-{request.url.path}",
-                }
-            ],
-        },
+    trace_id = new_trace_id("http")
+    logger.exception("Unhandled exception trace_id=%s path=%s", trace_id, request.url.path, exc_info=exc)
+
+    payload = ApiResponse[None](
+        status="failed",
+        data=None,
+        errors=[
+            build_error(
+                error_code="INTERNAL_SERVER_ERROR",
+                error_message="internal server error",
+                retryable=False,
+                trace_id=trace_id,
+            )
+        ],
     )
+    return JSONResponse(status_code=500, content=payload.model_dump())
 
 
 if __name__ == "__main__":
