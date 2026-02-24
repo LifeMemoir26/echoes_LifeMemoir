@@ -92,6 +92,11 @@ class EmbeddingConfig(BaseSettings):
     )
     dimension: int = Field(default=768, description="嵌入维度")
     batch_size: int = Field(default=100, description="向量编码批次大小（Gemini 限制）")
+    proxy: str = Field(
+        default="",
+        validation_alias=AliasChoices("EMBEDDING_PROXY", "embedding_proxy", "GEMINI_PROXY"),
+        description="HTTP 代理地址（如 http://127.0.0.1:7890），为空则直连"
+    )
 
     @computed_field  # type: ignore[misc]
     @property
@@ -130,11 +135,11 @@ class ExtractionConfig(BaseSettings):
 
 class InterviewAssistanceConfig(BaseSettings):
     """采访辅助配置"""
-    # 对话队列配置
-    dialogue_queue_size: int = Field(default=5, description="对话队列容量（轮数）")
-    
+    # 对话队列配置（ASR 会将一段话拆成多条，队列需更大）
+    dialogue_queue_size: int = Field(default=20, description="对话队列容量（轮数）")
+
     # 存储缓冲区配置
-    storage_threshold: int = Field(default=400, description="存储缓冲区字符数阈值")
+    storage_threshold: int = Field(default=800, description="存储缓冲区字符数阈值")
     
     # 总结提取配置
     summary_count: int = Field(default=16, description="每次提取的总结条数")
@@ -149,7 +154,11 @@ class InterviewAssistanceConfig(BaseSettings):
     event_extraction_similarity_threshold: float = Field(default=0.3, description="初始化从数据库提取低相似度人生事件时的相似度阈值")
     pending_event_from_db: int = Field(default=16, description="从数据库事件中提取的待探索事件数量")
     pending_event: int = Field(default=32, description="从chunks中AI分析提取的待探索事件数量")
-    
+
+    # n 轮刷新引擎配置
+    n_refresh_interval: int = Field(default=5, description="每 n 轮对话触发辅助刷新")
+    summary_queue_size: int = Field(default=5, description="SummaryQueue 固定容量（批次数）")
+
     class Config:
         env_prefix = "INTERVIEW_"
 
@@ -172,6 +181,15 @@ class GenerationConfig(BaseSettings):
         env_prefix = "GENERATION_"
 
 
+class AsrConfig(BaseSettings):
+    """科大讯飞实时语音转写 (RTASR) 配置"""
+    appid: str = Field(default="", description="讯飞 APPID")
+    api_key: str = Field(default="", description="讯飞 API Key")
+
+    class Config:
+        env_prefix = "ASR_"
+
+
 class OrchestrationConfig(BaseSettings):
     """编排引擎选择配置"""
 
@@ -192,6 +210,7 @@ class KnowledgeExtractionSettings(BaseSettings):
     interview: InterviewAssistanceConfig = Field(default_factory=InterviewAssistanceConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
+    asr: AsrConfig = Field(default_factory=AsrConfig)
     
     # 调试模式
     debug: bool = Field(default=False, description="调试模式")

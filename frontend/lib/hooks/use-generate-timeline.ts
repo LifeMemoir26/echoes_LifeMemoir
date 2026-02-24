@@ -1,20 +1,38 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiRequestError, normalizeUnknownError } from "@/lib/api/client";
-import { generateTimeline } from "@/lib/api/timeline";
+import { generateTimeline, getSavedTimeline } from "@/lib/api/timeline";
+import { useWorkspaceContext } from "@/lib/workspace/context";
 import type { NormalizedApiError, TimelineGenerateData, TimelineGenerateRequest } from "@/lib/api/types";
 
 export type GenerateTimelinePhase = "idle" | "pending" | "success" | "error";
 
 export function useGenerateTimeline() {
+  const { timelineCache, setTimelineCache } = useWorkspaceContext();
+
   const abortRef = useRef<AbortController | null>(null);
   const inFlightRef = useRef(false);
   const requestSeqRef = useRef(0);
-  const [lastRequest, setLastRequest] = useState<TimelineGenerateRequest | null>(null);
-  const [data, setData] = useState<TimelineGenerateData | null>(null);
-  const [error, setError] = useState<NormalizedApiError | null>(null);
+  const cacheAppliedRef = useRef(false);
+
+  // Initialise from cache (only on first mount — may be null if context hasn't
+  // hydrated from sessionStorage yet; the effect below handles the late arrival)
+  const [lastRequest, setLastRequest] = useState<TimelineGenerateRequest | null>(
+    () => timelineCache?.lastRequest ?? null
+  );
+  const [data, setData] = useState<TimelineGenerateData | null>(
+    () => (timelineCache?.phase === "success" ? timelineCache.data : null)
+  );
+  const [error, setError] = useState<NormalizedApiError | null>(
+    () => (timelineCache?.phase === "error" ? timelineCache.error : null)
+  );
+
+  // Mark cache as already applied if the lazy initializers did pick it up
+  if (timelineCache && !cacheAppliedRef.current && (data || error)) {
+    cacheAppliedRef.current = true;
+  }
 
   const mutation = useMutation<TimelineGenerateData, Error, TimelineGenerateRequest, { requestId: number }>({
     mutationFn: async (payload) => {
@@ -50,6 +68,58 @@ export function useGenerateTimeline() {
     }
   });
 
+  const phase: GenerateTimelinePhase = mutation.isPending
+    ? "pending"
+    : error
+      ? "error"
+      : data
+        ? "success"
+        : "idle";
+
+  // ── Restore from context cache when it arrives after mount ──────────────
+  useEffect(() => {
+    if (cacheAppliedRef.current || !timelineCache) return;
+    cacheAppliedRef.current = true;
+
+    if (timelineCache.phase === "success" && timelineCache.data) {
+      setData(timelineCache.data);
+      setLastRequest(timelineCache.lastRequest);
+    } else if (timelineCache.phase === "error") {
+      setError(timelineCache.error);
+      setLastRequest(timelineCache.lastRequest);
+    }
+  }, [timelineCache]);
+
+  // ── Load saved timeline from disk via React Query (cached 5 min) ────────
+  const savedQuery = useQuery({
+    queryKey: ["timeline-saved"],
+    queryFn: ({ signal }) => getSavedTimeline(signal),
+    staleTime: 5 * 60 * 1000,
+    enabled: !data && !error,
+  });
+
+  // Apply saved data once available
+  useEffect(() => {
+    if (data || error) return; // already have data from cache or generation
+    if (savedQuery.data && savedQuery.data.timeline.length > 0) {
+      setData(savedQuery.data);
+    }
+  }, [savedQuery.data, data, error]);
+
+  // ── Persist state to WorkspaceContext on each change ─────────────────────
+  useEffect(() => {
+    // Don't overwrite a valid restored cache with idle state on mount
+    if (phase === "idle" && !data && !error && !lastRequest) return;
+    setTimelineCache({
+      phase,
+      data,
+      error,
+      lastRequest,
+      savedAt: Date.now(),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, data, error, lastRequest]);
+
   const submit = useCallback(
     async (payload: TimelineGenerateRequest): Promise<TimelineGenerateData | null> => {
       if (mutation.isPending || inFlightRef.current) {
@@ -81,15 +151,8 @@ export function useGenerateTimeline() {
     setData(null);
     setError(null);
     mutation.reset();
-  }, [mutation]);
-
-  const phase: GenerateTimelinePhase = mutation.isPending
-    ? "pending"
-    : error
-      ? "error"
-      : data
-        ? "success"
-        : "idle";
+    setTimelineCache(null);
+  }, [mutation, setTimelineCache]);
 
   return {
     phase,

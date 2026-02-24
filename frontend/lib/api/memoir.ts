@@ -1,4 +1,4 @@
-import { ApiRequestError, apiPost } from "@/lib/api/client";
+import { ApiRequestError, apiGet, apiPost } from "@/lib/api/client";
 import type { MemoirGenerateData, MemoirGenerateRequest } from "@/lib/api/types";
 
 function validateMemoirData(data: MemoirGenerateData): MemoirGenerateData {
@@ -27,5 +27,12 @@ export async function generateMemoir(payload: MemoirGenerateRequest): Promise<Me
     auto_save: payload.auto_save ?? true
   });
 
+  return validateMemoirData(data);
+}
+
+/** Fetch previously saved memoir from disk. Returns null if none saved. */
+export async function getSavedMemoir(signal?: AbortSignal): Promise<MemoirGenerateData | null> {
+  const data = await apiGet<MemoirGenerateData | null>("/generate/memoir/saved", signal);
+  if (!data) return null;
   return validateMemoirData(data);
 }

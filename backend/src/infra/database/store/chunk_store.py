@@ -695,6 +695,18 @@ class ChunkStore:
             "vectorized": vectorized_count
         }
     
+    def delete_chunks_by_source(self, chunk_source: str) -> int:
+        """删除指定来源的所有 chunk 及其关联 summaries，返回删除的 chunk 数"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT chunk_id FROM chunks WHERE chunk_source = ?", (chunk_source,))
+        chunk_ids = [row[0] for row in cursor.fetchall()]
+        if chunk_ids:
+            placeholders = ",".join("?" * len(chunk_ids))
+            cursor.execute(f"DELETE FROM summaries WHERE chunk_id IN ({placeholders})", chunk_ids)
+            cursor.execute(f"DELETE FROM chunks WHERE chunk_id IN ({placeholders})", chunk_ids)
+        self.conn.commit()
+        return len(chunk_ids)
+
     def close(self):
         """关闭数据库连接"""
         if self.conn:

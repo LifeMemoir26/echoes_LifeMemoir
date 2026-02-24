@@ -67,7 +67,7 @@ export function useInterviewSession() {
     }
   }, [inFlightCommand]);
 
-  const send = useCallback(async (content: string) => {
+  const send = useCallback(async (content: string, speaker: string = "user") => {
     if (!session?.session_id || !canSubmitCommand) {
       return null;
     }
@@ -78,7 +78,7 @@ export function useInterviewSession() {
 
     try {
       const action = await sendInterviewMessage(session.session_id, {
-        speaker: "user",
+        speaker,
         content,
         timestamp: Date.now() / 1000
       });

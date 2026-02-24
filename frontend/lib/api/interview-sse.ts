@@ -134,6 +134,11 @@ export async function connectInterviewSse(
           });
         }
       }
+    } catch (err) {
+      // Swallow AbortError — caller is responsible for abort via controller.abort()
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (err instanceof Error && /aborted|bodystreambuffer/i.test(err.message)) return;
+      throw err;
     } finally {
       reader.releaseLock();
     }

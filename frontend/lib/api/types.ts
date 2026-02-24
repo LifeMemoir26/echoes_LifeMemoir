@@ -43,7 +43,12 @@ export type KnowledgeProcessData = {
   workflow_result: Record<string, unknown>;
 };
 
-export type TimelineEvent = Record<string, unknown>;
+export type TimelineEvent = {
+  event_id: number;
+  time: string;
+  objective_summary: string;
+  detailed_narrative: string;
+};
 
 export type TimelineGenerateData = {
   username: string;
@@ -117,7 +122,7 @@ export type EventSupplementItem = {
 export type InterviewStreamContext = {
   session_id: string;
   trace_id: string;
-  partial?: "pending_events" | "supplements";
+  partial?: "pending_events" | "supplements" | "anchors";
   background_meta?: Record<string, unknown>;
   pending_events?: {
     total: number;

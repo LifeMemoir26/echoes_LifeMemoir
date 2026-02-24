@@ -16,7 +16,11 @@ from src.application.interview.session import (
     create_interview_session,
     flush_dialogue_streaming,
     reset_interview_session,
+    _bootstrap_pending_events,
+    _bootstrap_supplements_bg,
+    _bootstrap_anchors_bg,
 )
+from src.core.config import get_settings
 
 from .deps import get_current_username
 from .errors import build_error, error_response
@@ -35,6 +39,158 @@ def _iso_now() -> str:
 
 def _encode_sse(event_id: int, event: str, payload: dict[str, Any]) -> str:
     return f"id: {event_id}\nevent: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _n_round_refresh_bg(
+    record: Any,
+    session_id: str,
+    trace_id: str,
+) -> None:
+    """
+    n 轮刷新引擎：并发运行三个 AI 子任务，各自完成后推 partial SSE。
+
+    Step 0：构建 raw_text、查询向量库、获取 char_profile 和 SummaryQueue 摘要。
+    Step 1：asyncio.gather 三个子任务（pending_events / supplements / anchors）。
+    """
+    session = record.interview_session
+    runtime = session.runtime
+    storage = runtime.storage
+
+    try:
+        # Step 0: 构建共享输入
+        buffer_text = storage.format_dialogues(storage.get_all_dialogues())
+        tmp_turns = storage.tmp_storage.get_before(storage.tmp_storage.mark_position())
+        tmp_text = "\n".join(str(t) for t in tmp_turns)
+        raw_text = f"{buffer_text}\n{tmp_text}".strip()
+
+        summaries = await storage.get_all_summaries()
+        char_profile = runtime.sqlite_client.get_character_profile_text()
+
+        # 向量检索（以格式化摘要作为查询）
+        formatted_summaries = [f"（重要性：{imp}）{s}" for imp, s in summaries]
+        vector_results: list[dict] = []
+        if formatted_summaries:
+            try:
+                vector_results = runtime.vector_store.query_relevant_chunks(
+                    summaries=formatted_summaries,
+                    top_k_per_summary=2,
+                    similarity_threshold=0.5,
+                )
+            except Exception as vec_exc:
+                pass  # vector store optional; proceed without
+
+        pending_events = await storage.get_all_pending_events()
+
+        # Step 1: 并发三个子任务
+        async def _enrich_task() -> None:
+            try:
+                from src.application.interview.dialogue_storage import UPDATE_EXPLORED
+                from src.domain.schemas.dialogue import TextChunk
+
+                chunk = TextChunk(content=raw_text, dialogue_count=0, total_chars=len(raw_text))
+                priority_events = await storage.get_priority_pending_events()
+                normal_events = await storage.get_priority_pending_events(if_non_priority=True)
+                priority_results, normal_results = (
+                    await runtime.pending_event_processor.extract_priority_and_normal_events(
+                        chunk=chunk,
+                        priority_events=priority_events,
+                        normal_events=normal_events,
+                    )
+                )
+                all_extractions = priority_results + normal_results
+                update_list: list[dict] = []
+                await runtime.pending_event_processor.merge_explored_content_batch(
+                    extractions=all_extractions,
+                    event_storage=storage,
+                    output_list=update_list,
+                )
+                if update_list:
+                    await storage.update_pending_events_batch(updates=update_list, fields=UPDATE_EXPLORED)
+
+                pending_summary = await session.get_pending_events_summary()
+                await registry.publish(
+                    session_id,
+                    "context",
+                    {
+                        "trace_id": trace_id,
+                        "partial": "pending_events",
+                        "pending_events": pending_summary,
+                        "at": _iso_now(),
+                    },
+                )
+            except Exception as exc:
+                await registry.publish(
+                    session_id, "error",
+                    {"error_code": "REFRESH_ENRICH_FAILED", "error_message": str(exc),
+                     "retryable": False, "trace_id": trace_id, "at": _iso_now()},
+                )
+
+        async def _supplements_task() -> None:
+            try:
+                result = await runtime.supplement_extractor.generate_supplements(
+                    raw_material=raw_text,
+                    summaries=summaries,
+                    vector_results=vector_results,
+                    char_profile=char_profile,
+                )
+                storage.update_event_supplements(result.supplements)
+                await registry.publish(
+                    session_id,
+                    "context",
+                    {
+                        "trace_id": trace_id,
+                        "partial": "supplements",
+                        "event_supplements": [s.model_dump() for s in result.supplements],
+                        "at": _iso_now(),
+                    },
+                )
+            except Exception as exc:
+                await registry.publish(
+                    session_id, "error",
+                    {"error_code": "REFRESH_SUPPLEMENTS_FAILED", "error_message": str(exc),
+                     "retryable": False, "trace_id": trace_id, "at": _iso_now()},
+                )
+
+        async def _anchors_task() -> None:
+            try:
+                result = await runtime.supplement_extractor.generate_anchors(
+                    raw_material=raw_text,
+                    summaries=summaries,
+                    vector_results=vector_results,
+                    char_profile=char_profile,
+                )
+                storage.update_interview_suggestions(result.positive_triggers, result.sensitive_topics)
+                await registry.publish(
+                    session_id,
+                    "context",
+                    {
+                        "trace_id": trace_id,
+                        "partial": "anchors",
+                        "positive_triggers": result.positive_triggers,
+                        "sensitive_topics": result.sensitive_topics,
+                        "at": _iso_now(),
+                    },
+                )
+            except Exception as exc:
+                await registry.publish(
+                    session_id, "error",
+                    {"error_code": "REFRESH_ANCHORS_FAILED", "error_message": str(exc),
+                     "retryable": False, "trace_id": trace_id, "at": _iso_now()},
+                )
+
+        await asyncio.gather(
+            _enrich_task(),
+            _supplements_task(),
+            _anchors_task(),
+            return_exceptions=True,
+        )
+
+    except Exception as exc:
+        await registry.publish(
+            session_id, "error",
+            {"error_code": "REFRESH_FAILED", "error_message": str(exc),
+             "retryable": False, "trace_id": trace_id, "at": _iso_now()},
+        )
 
 
 async def _process_message_bg(
@@ -69,35 +225,22 @@ async def _process_message_bg(
                 )
                 return
 
-            if "enrich_pending_events" in update:
-                pending_summary = await record.interview_session.get_pending_events_summary()
-                await registry.publish(
+            # After ingest node: check n-round refresh + trigger mark-and-drain summary
+            if "ingest" in update:
+                storage = record.interview_session.runtime.storage
+                config = get_settings().interview
+                # 12.2: n 轮刷新检查
+                if storage.dialogue_count > 0 and storage.dialogue_count % config.n_refresh_interval == 0:
+                    asyncio.create_task(_n_round_refresh_bg(record, session_id, trace_id))
+                # 12.3: TmpStorage mark-and-drain 摘要触发
+                storage.trigger_summary_update_if_ready(
                     session_id,
-                    "context",
-                    {
-                        "trace_id": trace_id,
-                        "partial": "pending_events",
-                        "pending_events": pending_summary,
-                        "at": _iso_now(),
-                    },
+                    registry,
+                    trace_id,
+                    record.interview_session.runtime.summary_processor,
                 )
 
-            if "build_context" in update:
-                background_info = record.interview_session.get_background_info()
-                await registry.publish(
-                    session_id,
-                    "context",
-                    {
-                        "trace_id": trace_id,
-                        "partial": "supplements",
-                        "event_supplements": background_info.get("event_supplements", []),
-                        "positive_triggers": background_info.get("positive_triggers", []),
-                        "sensitive_topics": background_info.get("sensitive_topics", []),
-                        "at": _iso_now(),
-                    },
-                )
-
-            if "persist" in update:
+            if "push_summary" in update:
                 await registry.publish(
                     session_id,
                     "completed",
@@ -125,7 +268,7 @@ async def _process_message_bg(
         )
     finally:
         if not completed:
-            # buffered branch: split_or_buffer → __end__ without persist
+            # buffered branch: split_or_buffer → __end__ without push_summary
             await registry.publish(
                 session_id,
                 "completed",
@@ -159,7 +302,7 @@ async def _process_flush_bg(
                 )
                 return
 
-            if "persist" in update:
+            if "push_summary" in update:
                 await registry.publish(
                     session_id,
                     "completed",
@@ -290,6 +433,20 @@ async def create_session(
             "created_at": record.created_at.isoformat(),
         },
     )
+
+    # 三并发 bootstrap：各自完成后独立推 SSE
+    _bs_trace = record.thread_id
+
+    async def _run_bootstrap() -> None:
+        await asyncio.gather(
+            _bootstrap_pending_events(interview_session, record.session_id, _bs_trace),
+            _bootstrap_supplements_bg(interview_session, record.session_id, registry, _bs_trace),
+            _bootstrap_anchors_bg(interview_session, record.session_id, registry, _bs_trace),
+            return_exceptions=True,
+        )
+
+    asyncio.create_task(_run_bootstrap())
+
     return ApiResponse(
         status="success",
         data=SessionCreateData(
@@ -475,6 +632,25 @@ async def stream_events(
             "resumed": resume_from is not None,
         }
         yield _encode_sse(0, "connected", connected_payload)
+
+        # Always push current in-memory state so panels populate immediately
+        # (covers both reconnect and recover-from-conflict scenarios)
+        try:
+            isession = record.interview_session
+            supplements = isession.get_event_supplements()
+            suggestions = isession.get_interview_suggestions()
+            pending = await isession.get_pending_events_summary()
+            snapshot: dict[str, Any] = {
+                "trace_id": record.thread_id,
+                "event_supplements": [s.model_dump() for s in (supplements or [])],
+                "positive_triggers": suggestions.positive_triggers if suggestions else [],
+                "sensitive_topics": suggestions.sensitive_topics if suggestions else [],
+                "pending_events": pending,
+                "at": _iso_now(),
+            }
+            yield _encode_sse(0, "context", snapshot)
+        except Exception:
+            pass  # snapshot is best-effort; stream continues regardless
 
         try:
             while True:

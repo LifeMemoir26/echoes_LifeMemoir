@@ -18,8 +18,9 @@ class DialogueTurn:
         return len(self.content)
     
     def __str__(self) -> str:
-        """格式化输出"""
-        return f"[{self.speaker}]: {self.content}"
+        """格式化输出: [Interviewer]:XXX 或 [用户名]:XXX"""
+        label = "[Interviewer]" if self.speaker == "interviewer" else f"[{self.speaker}]"
+        return f"{label}:{self.content}"
 
 
 @dataclass

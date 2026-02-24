@@ -1,36 +1,104 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
-import { RefreshCw, Send, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw, X } from "lucide-react";
 import { useInterviewEvents } from "@/lib/hooks/use-interview-events";
 import { useInterviewSession } from "@/lib/hooks/use-interview-session";
 import { useWorkspaceContext } from "@/lib/workspace/context";
 import type { EventSupplementItem, PendingEventDetail } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { BackgroundSupplementPanel } from "./background-supplement-panel";
 import { EmotionalAnchorsPanel } from "./emotional-anchors-panel";
 import { PendingEventsPanel } from "./pending-events-panel";
+import { VoiceRecordPanel } from "./voice-record-panel";
 
-type Message = { role: "user"; content: string; at: string };
+type SpeakerRole = "interviewer" | "interviewee";
+type Message = { role: SpeakerRole; content: string; at: string };
+
+/** Group consecutive same-speaker messages into merged entries for display. */
+function mergeConsecutiveMessages(msgs: Message[]): Array<{ role: SpeakerRole; content: string; at: string; count: number }> {
+  const result: Array<{ role: SpeakerRole; content: string; at: string; count: number }> = [];
+  for (const msg of msgs) {
+    const last = result[result.length - 1];
+    if (last && last.role === msg.role) {
+      last.content += msg.content;
+      last.count += 1;
+    } else {
+      result.push({ ...msg, count: 1 });
+    }
+  }
+  return result;
+}
 
 export function InterviewPage() {
   const { session, state, error, canSubmitCommand, create, send, flush, close, syncFromServerEvent, recoverableSessionId, recoverFromConflict } =
     useInterviewSession();
 
-  const { username } = useWorkspaceContext();
+  const { username, activeSessionId, interviewMessagesCache, setInterviewMessagesCache } = useWorkspaceContext();
   const { contextEvent, statusEvent, completedEvent, connectionState } = useInterviewEvents(session?.session_id ?? null);
 
-  const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Restore messages from cache if the session matches and cache is fresh (10 min)
+  const messagesCacheAppliedRef = useRef(false);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (
+      interviewMessagesCache &&
+      activeSessionId &&
+      interviewMessagesCache.sessionId === activeSessionId &&
+      Date.now() - interviewMessagesCache.savedAt < 10 * 60 * 1000
+    ) {
+      messagesCacheAppliedRef.current = true;
+      return interviewMessagesCache.messages as Message[];
+    }
+    return [];
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Late restore: interviewMessagesCache may arrive after mount (context hydrates
+  // from sessionStorage in a useEffect).  Apply it once when it becomes available.
+  useEffect(() => {
+    if (messagesCacheAppliedRef.current || !interviewMessagesCache) return;
+    if (
+      activeSessionId &&
+      interviewMessagesCache.sessionId === activeSessionId &&
+      Date.now() - interviewMessagesCache.savedAt < 10 * 60 * 1000
+    ) {
+      messagesCacheAppliedRef.current = true;
+      setMessages(interviewMessagesCache.messages as Message[]);
+    }
+  }, [interviewMessagesCache, activeSessionId]);
 
   const [supplements, setSupplements] = useState<EventSupplementItem[]>([]);
   const [pendingEvents, setPendingEvents] = useState<PendingEventDetail[]>([]);
   const [positiveTriggers, setPositiveTriggers] = useState<string[]>([]);
   const [sensitiveTopics, setSensitiveTopics] = useState<string[]>([]);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  // Per-panel loading state: false = loading (bootstrap not yet arrived), true = has data
+  const [supplementsLoaded, setSupplementsLoaded] = useState(false);
+  const [pendingEventsLoaded, setPendingEventsLoaded] = useState(false);
+  const [anchorsLoaded, setAnchorsLoaded] = useState(false);
+
+  const isConnected = session !== null && state !== "closed" && state !== "idle_timeout";
+  const isProcessing = state === "processing" || state === "flushing";
+
+  // Merge consecutive same-speaker messages for display
+  const mergedMessages = useMemo(() => mergeConsecutiveMessages(messages), [messages]);
+
+  // Persist messages to WorkspaceContext cache (max 100, to avoid sessionStorage quota)
+  useEffect(() => {
+    const sessionId = session?.session_id ?? activeSessionId;
+    if (!sessionId) return;
+    // Don't overwrite a valid restored cache with empty messages on mount
+    if (messages.length === 0) return;
+    setInterviewMessagesCache({
+      sessionId,
+      messages: messages.slice(-100) as typeof messages,
+      savedAt: Date.now(),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
 
   useEffect(() => {
     if (statusEvent) syncFromServerEvent(statusEvent.status, statusEvent.session_id);
@@ -46,6 +114,7 @@ export function InterviewPage() {
     if (contextEvent.partial === "pending_events") {
       const events = contextEvent.pending_events?.events ?? [];
       setPendingEvents(events);
+      setPendingEventsLoaded(true);
       const incomingIds = new Set(events.map((e) => e.id));
       setExpandedIds((prev) => {
         const pruned = new Set<string>();
@@ -59,18 +128,27 @@ export function InterviewPage() {
 
     if (contextEvent.partial === "supplements") {
       setSupplements(contextEvent.event_supplements ?? []);
-      setPositiveTriggers(contextEvent.positive_triggers ?? []);
-      setSensitiveTopics(contextEvent.sensitive_topics ?? []);
+      setSupplementsLoaded(true);
       return;
     }
 
-    // Full update (no partial field)
+    if (contextEvent.partial === "anchors") {
+      setPositiveTriggers(contextEvent.positive_triggers ?? []);
+      setSensitiveTopics(contextEvent.sensitive_topics ?? []);
+      setAnchorsLoaded(true);
+      return;
+    }
+
+    // Full update (no partial field) — backward-compatible path
     setSupplements(contextEvent.event_supplements ?? []);
+    setSupplementsLoaded(true);
     setPositiveTriggers(contextEvent.positive_triggers ?? []);
     setSensitiveTopics(contextEvent.sensitive_topics ?? []);
+    setAnchorsLoaded(true);
 
     const events = contextEvent.pending_events?.events ?? [];
     setPendingEvents(events);
+    setPendingEventsLoaded(true);
 
     const incomingIds = new Set(events.map((e) => e.id));
     setExpandedIds((prev) => {
@@ -86,28 +164,20 @@ export function InterviewPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, state]);
 
+  // Reset per-panel loading flags when a new session is created
+  useEffect(() => {
+    if (isConnected) {
+      setSupplementsLoaded(false);
+      setPendingEventsLoaded(false);
+      setAnchorsLoaded(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.session_id]);
+
   const handleCreate = useCallback(async () => {
     if (!username) return;
     await create(username);
   }, [create, username]);
-
-  const handleSend = useCallback(async () => {
-    const content = draft.trim();
-    if (!content || !canSubmitCommand) return;
-    setDraft("");
-    setMessages((prev) => [...prev, { role: "user", content, at: new Date().toISOString() }]);
-    await send(content);
-  }, [canSubmitCommand, draft, send]);
-
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        void handleSend();
-      }
-    },
-    [handleSend]
-  );
 
   const handleToggle = useCallback((id: string) => {
     setExpandedIds((prev) => {
@@ -117,9 +187,6 @@ export function InterviewPage() {
       return next;
     });
   }, []);
-
-  const isConnected = session !== null && state !== "closed" && state !== "idle_timeout";
-  const isProcessing = state === "processing" || state === "flushing";
 
   const statusLabel = isProcessing
     ? { status: "loading" as const, text: "处理中" }
@@ -131,15 +198,14 @@ export function InterviewPage() {
 
   const sseLabel =
     isConnected && connectionState === "reconnecting"
-      ? { status: "warning" as const, text: "重连中" }
+      ? { status: "loading" as const, text: "重连中" }
       : isConnected && connectionState === "fatal"
         ? { status: "error" as const, text: "连接失败" }
         : null;
 
   return (
     <main
-      className="flex min-h-screen flex-col"
-      style={{ background: "radial-gradient(circle at top, #FDF6EE 0%, #fafaf8 45%, #fafaf8 100%)" }}
+      className="flex h-full flex-col overflow-hidden"
     >
       {/* Status bar */}
       <div className="shrink-0 flex items-center justify-end gap-2 px-6 py-3 border-b border-black/[0.06] bg-white/80 backdrop-blur-sm">
@@ -240,16 +306,35 @@ export function InterviewPage() {
 
           {isConnected && (
             <>
+              {/* Message list — consecutive same-speaker messages are merged */}
               <div className="flex-1 overflow-y-auto space-y-3 px-4 py-4">
-                {messages.length === 0 && (
+                {mergedMessages.length === 0 && (
                   <p className="pt-8 text-center text-xs text-slate-400">
-                    发送第一条采访内容开始记录
+                    点击录音按钮开始采访
                   </p>
                 )}
-                {messages.map((msg, i) => (
-                  <div key={i} className="flex justify-end">
-                    <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-[#A2845E] px-3 py-2 text-sm leading-relaxed text-white">
-                      {msg.content}
+                {mergedMessages.map((msg, i) => (
+                  <div
+                    key={i}
+                    className={`flex ${msg.role === "interviewer" ? "justify-start" : "justify-end"}`}
+                  >
+                    <div className="flex flex-col gap-0.5 max-w-[80%]">
+                      <span
+                        className={`text-[10px] ${
+                          msg.role === "interviewer" ? "text-slate-400 pl-1" : "text-[#A2845E]/60 pr-1 text-right"
+                        }`}
+                      >
+                        {msg.role === "interviewer" ? "采访者" : (username || "受访者")}
+                      </span>
+                      <div
+                        className={`rounded-2xl px-3 py-2 text-sm leading-relaxed ${
+                          msg.role === "interviewer"
+                            ? "rounded-tl-sm bg-slate-100 text-slate-800"
+                            : "rounded-tr-sm bg-[#A2845E] text-white"
+                        }`}
+                      >
+                        {msg.content}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -263,28 +348,20 @@ export function InterviewPage() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {/* Voice input area */}
               <div className="shrink-0 border-t border-slate-200 p-3">
-                <div className="flex gap-2">
-                  <textarea
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    rows={2}
-                    disabled={!canSubmitCommand}
-                    placeholder="输入采访内容… (Enter 发送)"
-                    aria-label="采访内容输入"
-                    className="focus-visible-ring flex-1 resize-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 disabled:opacity-50"
-                  />
-                  <Button
-                    onClick={() => void handleSend()}
-                    disabled={!canSubmitCommand || !draft.trim()}
-                    size="sm"
-                    className="self-end"
-                    aria-label="发送消息"
-                  >
-                    <Send className="h-4 w-4" />
-                  </Button>
-                </div>
+                <VoiceRecordPanel
+                  username={username || "受访者"}
+                  onSegment={(seg) => {
+                    const role: SpeakerRole = seg.speaker === "interviewer" ? "interviewer" : "interviewee";
+                    setMessages((prev) => [
+                      ...prev,
+                      { role, content: seg.content, at: new Date().toISOString() },
+                    ]);
+                    void send(seg.content, seg.speaker);
+                  }}
+                  disabled={!canSubmitCommand}
+                />
               </div>
             </>
           )}
@@ -292,17 +369,29 @@ export function InterviewPage() {
 
         {/* RIGHT: three-panel assist area */}
         <div className="grid flex-1 grid-cols-2 grid-rows-2 gap-4 overflow-hidden p-6">
-          <div className="row-span-2 overflow-hidden rounded-xl border border-black/[0.06] bg-white/80 backdrop-blur-sm p-5">
-            <BackgroundSupplementPanel supplements={supplements} />
-          </div>
+          <Card className="row-span-2 min-h-0 overflow-hidden p-5">
+            {isConnected && !supplementsLoaded ? (
+              <div className="flex h-full items-center justify-center text-xs text-slate-400">加载中…</div>
+            ) : (
+              <BackgroundSupplementPanel supplements={supplements} />
+            )}
+          </Card>
 
-          <div className="overflow-hidden rounded-xl border border-black/[0.06] bg-white/80 backdrop-blur-sm p-5">
-            <PendingEventsPanel events={pendingEvents} expandedIds={expandedIds} onToggle={handleToggle} />
-          </div>
+          <Card className="min-h-0 overflow-hidden p-5">
+            {isConnected && !pendingEventsLoaded ? (
+              <div className="flex h-full items-center justify-center text-xs text-slate-400">加载中…</div>
+            ) : (
+              <PendingEventsPanel events={pendingEvents} expandedIds={expandedIds} onToggle={handleToggle} />
+            )}
+          </Card>
 
-          <div className="overflow-hidden rounded-xl border border-black/[0.06] bg-white/80 backdrop-blur-sm p-5">
-            <EmotionalAnchorsPanel positiveTriggers={positiveTriggers} sensitiveTopics={sensitiveTopics} />
-          </div>
+          <Card className="min-h-0 overflow-hidden p-5">
+            {isConnected && !anchorsLoaded ? (
+              <div className="flex h-full items-center justify-center text-xs text-slate-400">加载中…</div>
+            ) : (
+              <EmotionalAnchorsPanel positiveTriggers={positiveTriggers} sensitiveTopics={sensitiveTopics} />
+            )}
+          </Card>
         </div>
       </div>
     </main>

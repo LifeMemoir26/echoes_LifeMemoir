@@ -2,6 +2,7 @@
 对话存储统一管理类
 整合对话缓冲区、临时存储、最近总结、待探索事件和背景信息的功能
 """
+import asyncio
 from typing import Optional, List, Tuple, TYPE_CHECKING
 import logging
 
@@ -14,7 +15,7 @@ from .pending_event import (
     UPDATE_EXPLORED,
     UPDATE_SUMMARY
 )
-from .summary import SummaryManager
+from .summary import SummaryManager, SummaryQueue
 from .event_supplement import EventSupplementManager
 from .interview_suggestion import InterviewSuggestionManager
 from ....domain.schemas.interview import EventSupplement, InterviewSuggestions
@@ -53,28 +54,36 @@ class DialogueStorage:
     
     def __init__(
         self,
-        queue_max_size: int = 10,
-        storage_threshold: int = 800
+        queue_max_size: int = 20,
+        storage_threshold: int = 800,
+        summary_queue_size: int = 5,
     ):
         """
         初始化对话存储
-        
+
         Args:
             queue_max_size: 对话队列最大容量（轮数）
             storage_threshold: 临时存储字符数阈值
+            summary_queue_size: SummaryQueue 批次容量
         """
-        # 初始化六个组件
+        # 初始化七个组件
         self.buffer = DialogueBuffer(max_size=queue_max_size)
         self.tmp_storage = TmpStorage(threshold=storage_threshold)
-        self.summary_manager = SummaryManager()
+        self.summary_manager = SummaryManager()  # kept for backward compat
+        self.summary_queue = SummaryQueue(capacity=summary_queue_size)
         self.pending_event_manager = PendingEventManager()
         self.event_supplement_manager = EventSupplementManager()
         self.interview_suggestion_manager = InterviewSuggestionManager()
-        
+
         logger.info(
-            f"DialogueStorage initialized with 6 components: "
-            f"queue_max_size={queue_max_size}, storage_threshold={storage_threshold}"
+            f"DialogueStorage initialized with 7 components: "
+            f"queue_max_size={queue_max_size}, storage_threshold={storage_threshold}, "
+            f"summary_queue_size={summary_queue_size}"
         )
+
+        # n 轮刷新引擎辅助字段
+        self.dialogue_count: int = 0
+        self._summary_in_flight: bool = False
     
     # =========================================================================
     # 核心方法：添加对话
@@ -104,7 +113,10 @@ class DialogueStorage:
         """
         # 创建对话轮次
         turn = DialogueTurn(speaker=speaker, content=content, timestamp=timestamp)
-        
+
+        # 单调递增计数器（每次 add_dialogue 调用自增）
+        self.dialogue_count += 1
+
         # 添加到缓冲区，可能返回被移除的对话
         removed_turn = self.buffer.add(turn)
         
@@ -236,6 +248,14 @@ class DialogueStorage:
     async def clear_summaries(self):
         """清空最近的总结"""
         await self.summary_manager.clear()
+
+    async def push_summaries(self, summaries: List[Tuple[int, str]]) -> None:
+        """向 SummaryQueue 追加一批摘要（替代 set_latest_summaries 的新路径）。"""
+        await self.summary_queue.push(summaries)
+
+    async def get_all_summaries(self) -> List[Tuple[int, str]]:
+        """从 SummaryQueue 获取所有批次展平后的摘要 tuples（oldest-first）。"""
+        return await self.summary_queue.get_all()
     
     # =========================================================================
     # 待探索事件相关方法
@@ -430,14 +450,89 @@ class DialogueStorage:
         return await self.pending_event_manager.count()
     
     # =========================================================================
+    # mark-and-drain 摘要触发器
+    # =========================================================================
+
+    def trigger_summary_update_if_ready(
+        self,
+        session_id: str,
+        registry: object,
+        trace_id: str,
+        summary_processor: object,
+    ) -> None:
+        """
+        若 TmpStorage 有内容且无摘要任务在飞，则启动 mark-and-drain 摘要更新。
+
+        Guard 逻辑：若 _summary_in_flight == True，立即返回（防并发）。
+        """
+        if self._summary_in_flight:
+            return
+        mark = self.tmp_storage.mark_position()
+        if mark == 0:
+            return  # 存储为空，无需触发
+        self._summary_in_flight = True
+        asyncio.create_task(
+            self._summary_update_bg(mark, session_id, registry, trace_id, summary_processor)
+        )
+
+    async def _summary_update_bg(
+        self,
+        mark: int,
+        session_id: str,
+        registry: object,
+        trace_id: str,
+        summary_processor: object,
+    ) -> None:
+        """
+        mark-and-drain 后台任务：
+        1. 读取 [0, mark) 范围内容
+        2. AI 摘要
+        3. 清除已处理内容，push 到 SummaryQueue
+        4. 若剩余字符仍 >= 阈值，立即重触发
+        """
+        from ....domain.schemas.dialogue import TextChunk
+
+        try:
+            turns = self.tmp_storage.get_before(mark)
+            if not turns:
+                return
+
+            content = "\n".join(str(t) for t in turns)
+            chunk = TextChunk(
+                content=content,
+                dialogue_count=len(turns),
+                total_chars=sum(len(t) for t in turns),
+            )
+
+            summaries = await summary_processor.extract(chunk)
+            summary_tuples = [(s.importance, s.summary) for s in summaries]
+
+            self.tmp_storage.clear_before(mark)
+            await self.summary_queue.push(summary_tuples)
+            logger.info(
+                "mark-and-drain: summarized %d turns → %d tuples; session=%s",
+                len(turns), len(summary_tuples), session_id,
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "mark-and-drain summary failed for session=%s: %s", session_id, exc, exc_info=True
+            )
+        finally:
+            self._summary_in_flight = False
+            # 若剩余内容仍达到阈值，立即重触发
+            if self.tmp_storage.chars_count() >= self.tmp_storage.threshold:
+                self.trigger_summary_update_if_ready(session_id, registry, trace_id, summary_processor)
+
+    # =========================================================================
     # 通用方法
     # =========================================================================
-    
+
     async def clear_all(self):
-        """清空所有存储区域（包括对话缓冲区、临时存储、总结、待探索事件和背景信息）"""
         self.buffer.clear()
         self.tmp_storage.clear()
         await self.clear_summaries()
+        await self.summary_queue.clear()
         await self.clear_pending_events()
         self.event_supplement_manager.clear()
         self.interview_suggestion_manager.clear()

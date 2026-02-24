@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Annotated
+from typing import Annotated, Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi.responses import StreamingResponse
 
 from src.application.knowledge.api import process_knowledge_file
+from src.application.workflows.knowledge.workflow import run_knowledge_file_stream
 from src.core.paths import get_data_root
 from src.infra.database.sqlite_client import SQLiteClient
 from src.infra.database.store.chunk_store import ChunkStore
+
+from .material_registry import material_registry
 from src.infra.storage.material_store import MaterialStore
 
 from .deps import get_current_username
@@ -265,7 +274,9 @@ async def get_profiles(
 async def upload_material(
     current_username: Annotated[str, Depends(get_current_username)],
     username: str = Form(...),
+    display_name: str = Form(default=""),
     material_context: str = Form(default=""),
+    skip_processing: bool = Form(default=False),
     files: list[UploadFile] = File(...),
 ) -> ApiResponse[MaterialUploadData]:
     """批量上传文档材料并触发知识提取流程。"""
@@ -327,40 +338,52 @@ async def upload_material(
                 material_context=material_context,
                 file_path=rel_path,
                 file_size=len(content),
+                display_name=display_name,
+                initial_status="pending" if skip_processing else "processing",
             )
 
-            # 触发知识提取工作流（串行，避免并发过高）
-            stored_path = (data_root / safe_username / rel_path).resolve()
-            result = await process_knowledge_file(
-                file_path=stored_path,
-                username=safe_username,
-                data_base_dir=data_root,
-                material_type="document",
-                material_context=material_context,
-                material_id=material_id,
-            )
-
-            if result.get("status") == "failed":
-                db_client.update_material_status(
-                    material_id=material_id,
-                    status="failed",
-                )
-                items.append(MaterialUploadItem(
-                    file_name=upload.filename,
-                    status="error",
-                    material_id=material_id,
-                    error_message="knowledge workflow failed",
-                ))
-            else:
-                kg = result.get("knowledge_graph", {})
-                events_count = kg.get("events_count", 0)
+            if skip_processing:
+                # 仅保存文件，不触发知识提取 — 状态保持 pending
                 success_count += 1
                 items.append(MaterialUploadItem(
                     file_name=upload.filename,
                     status="success",
                     material_id=material_id,
-                    events_count=events_count,
+                    events_count=0,
                 ))
+            else:
+                # 触发知识提取工作流（串行，避免并发过高）
+                stored_path = (data_root / safe_username / rel_path).resolve()
+                result = await process_knowledge_file(
+                    file_path=stored_path,
+                    username=safe_username,
+                    data_base_dir=data_root,
+                    material_type="document",
+                    material_context=material_context,
+                    material_id=material_id,
+                )
+
+                if result.get("status") == "failed":
+                    db_client.update_material_status(
+                        material_id=material_id,
+                        status="failed",
+                    )
+                    items.append(MaterialUploadItem(
+                        file_name=upload.filename,
+                        status="error",
+                        material_id=material_id,
+                        error_message="knowledge workflow failed",
+                    ))
+                else:
+                    kg = result.get("knowledge_graph", {})
+                    events_count = kg.get("events_count", 0)
+                    success_count += 1
+                    items.append(MaterialUploadItem(
+                        file_name=upload.filename,
+                        status="success",
+                        material_id=material_id,
+                        events_count=events_count,
+                    ))
 
         except Exception as exc:
             items.append(MaterialUploadItem(
@@ -379,17 +402,91 @@ async def upload_material(
     )
 
 
+def _migrate_legacy_metrials(
+    db_client: SQLiteClient,
+    data_root: Path,
+    username: str,
+) -> None:
+    """扫描旧 metrials/ 目录，将没有 DB 记录的文件自动注册到 materials 表。
+
+    旧端点 /knowledge/process 将文件写到 metrials/（拼写有误），但不写 DB。
+    此函数在首次读取时自动将这些孤立文件补录入库，后续调用幂等。
+    优先从 uploads.jsonl 读取 original_filename 作为展示名。
+    """
+    legacy_dir = (data_root / username / "metrials").resolve()
+    if not legacy_dir.exists():
+        return
+
+    existing_rows = db_client.get_all_materials()
+    registered_paths = {row.get("file_path", "") for row in existing_rows}
+
+    # 从 uploads.jsonl 构建 stored_path → original_filename 映射
+    jsonl_meta: dict[str, dict] = {}
+    jsonl_path = legacy_dir / "uploads.jsonl"
+    if jsonl_path.exists():
+        for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                key = entry.get("stored_path", "")
+                if key:
+                    jsonl_meta[key] = entry
+            except json.JSONDecodeError:
+                pass
+
+    _allowed = {".txt", ".md", ".markdown"}
+    for file_path in sorted(legacy_dir.iterdir()):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in _allowed:
+            continue
+
+        rel_path = str(file_path.relative_to(data_root / username))
+        if rel_path in registered_paths:
+            continue
+
+        material_id = uuid.uuid4().hex[:8]
+        file_size = file_path.stat().st_size
+
+        # 优先用 uploads.jsonl 里的原始文件名作为展示名
+        meta = jsonl_meta.get(str(file_path.resolve()), {})
+        original_filename = meta.get("original_filename", file_path.name)
+        display_name = Path(original_filename).stem  # 去掉扩展名
+
+        db_client.insert_material(
+            material_id=material_id,
+            filename=file_path.name,
+            material_type="document",
+            file_path=rel_path,
+            file_size=file_size,
+            display_name=display_name,
+        )
+        db_client.update_material_status(
+            material_id=material_id,
+            status="done",
+        )
+        logger.info(f"Legacy metrials file registered: {rel_path} ({original_filename}) → {material_id}")
+
+
 @router.get("/knowledge/materials", response_model=ApiResponse[MaterialsListData])
 async def list_materials(
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[MaterialsListData]:
-    """返回当前用户的所有 materials 记录。"""
+    """返回当前用户的所有 materials 记录，同时将旧 metrials/ 目录中未注册的文件懒迁移入库。"""
+    data_root = get_data_root()
     db_client = SQLiteClient(username=current_username)
+
+    # 懒迁移：扫描旧 metrials/ 目录，将没有 DB 记录的文件自动注册
+    _migrate_legacy_metrials(db_client, data_root, current_username)
+
     rows = db_client.get_all_materials()
     materials = [
         MaterialItem(
             id=row["id"],
             filename=row["filename"],
+            display_name=row.get("display_name", ""),
             material_type=row["material_type"],
             material_context=row.get("material_context", ""),
             file_path=row.get("file_path"),
@@ -403,3 +500,317 @@ async def list_materials(
         for row in rows
     ]
     return ApiResponse(status="success", data=MaterialsListData(materials=materials))
+
+
+@router.get("/knowledge/materials/{material_id}/content", response_model=ApiResponse[dict])
+async def get_material_content(
+    material_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[dict]:
+    """返回指定 material 的原始文件文本内容。"""
+    trace_id = new_trace_id("material-content")
+    db_client = SQLiteClient(username=current_username)
+    rows = db_client.get_all_materials()
+    row = next((r for r in rows if r["id"] == material_id), None)
+    if not row:
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_NOT_FOUND",
+            error_message=f"material {material_id} not found",
+            trace_id=trace_id,
+        )
+    file_path: str | None = row.get("file_path")
+    if not file_path:
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_FILE_MISSING",
+            error_message="material has no associated file path",
+            trace_id=trace_id,
+        )
+    full_path = (get_data_root() / current_username / file_path).resolve()
+    if not full_path.exists():
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_FILE_MISSING",
+            error_message="material file not found on disk",
+            trace_id=trace_id,
+        )
+    content = full_path.read_text(encoding="utf-8", errors="replace")
+    return ApiResponse(status="success", data={"content": content})
+
+
+@router.delete("/knowledge/materials/{material_id}", response_model=ApiResponse[dict])
+async def delete_material(
+    material_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[dict]:
+    """删除指定 material 及其关联的事件、侧写、chunks。"""
+    trace_id = new_trace_id("delete-material")
+    db_client = SQLiteClient(username=current_username)
+    row = db_client.get_material_by_id(material_id)
+    if not row:
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_NOT_FOUND",
+            error_message=f"material {material_id} not found",
+            trace_id=trace_id,
+        )
+
+    if material_registry.is_active(material_id):
+        raise error_response(
+            status_code=409,
+            error_code="MATERIAL_PROCESSING",
+            error_message="无法删除正在处理的素材",
+            trace_id=trace_id,
+        )
+
+    # 删除磁盘文件
+    file_path_rel: str | None = row.get("file_path")
+    if file_path_rel:
+        full_path = (get_data_root() / current_username / file_path_rel).resolve()
+        if full_path.exists():
+            full_path.unlink(missing_ok=True)
+
+    # 删除关联 chunks（通过 filename 匹配 chunk_source）
+    chunk_store = ChunkStore(username=current_username)
+    filename = row.get("filename", "")
+    if filename:
+        chunk_store.delete_chunks_by_source(filename)
+
+    # 删除 DB 记录（events、profiles、material 本身）
+    db_client.delete_material(material_id)
+
+    return ApiResponse(status="success", data={"material_id": material_id})
+
+
+# ------------------------------------------------------------------
+# Material re-processing (SSE streaming)
+# ------------------------------------------------------------------
+
+_STAGE_LABELS: dict[str, str] = {
+    "ingest": "读取文件",
+    "extract": "提取事件",
+    "vectorize": "向量化",
+    "finalize": "完成",
+}
+
+_SSE_HEARTBEAT_SECONDS = 15
+
+
+def _encode_sse(event: str, payload: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _reprocess_bg(
+    material_id: str,
+    file_path: Path,
+    username: str,
+    material_context: str,
+    material_type: str,
+    trace_id: str,
+) -> None:
+    """Background task: run knowledge workflow and publish stage events to registry."""
+    from src.application.workflows import WorkflowFacade
+
+    db_client = SQLiteClient(username=username)
+    facade = WorkflowFacade(username=username)
+    try:
+        workflow = facade._get_knowledge_workflow()
+        thread_id = trace_id
+
+        async for chunk in run_knowledge_file_stream(
+            workflow,
+            file_path=file_path,
+            username=username,
+            thread_id=thread_id,
+            material_type=material_type,
+            material_context=material_context,
+            material_id=material_id,
+        ):
+            node_name: str = chunk.get("node", "")
+            output: dict[str, Any] = chunk.get("output", {})
+
+            if output.get("status") == "failed":
+                await material_registry.publish(
+                    material_id,
+                    "error",
+                    {"stage": node_name, "message": str(output.get("errors", "unknown error")), "at": datetime.now(timezone.utc).isoformat()},
+                )
+                db_client.update_material_status(material_id=material_id, status="failed")
+                return
+
+            stage_label = _STAGE_LABELS.get(node_name, node_name)
+            await material_registry.publish(
+                material_id,
+                "status",
+                {"stage": node_name, "label": stage_label, "at": datetime.now(timezone.utc).isoformat()},
+            )
+
+        # Workflow completed successfully
+        kg_stats = {}
+        vec_stats = {}
+        # Re-read final state from DB (already updated by workflow finalize node)
+        row = db_client.get_material_by_id(material_id)
+        if row:
+            kg_stats = {"events_count": row.get("events_count", 0)}
+            vec_stats = {"chunks_count": row.get("chunks_count", 0)}
+
+        await material_registry.publish(
+            material_id,
+            "completed",
+            {
+                "events_count": kg_stats.get("events_count", 0),
+                "chunks_count": vec_stats.get("chunks_count", 0),
+                "at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        db_client.update_material_status(
+            material_id=material_id,
+            status="done",
+            events_count=kg_stats.get("events_count", 0),
+            chunks_count=vec_stats.get("chunks_count", 0),
+        )
+
+    except Exception as exc:
+        logger.error("_reprocess_bg failed for material %s: %s", material_id, exc, exc_info=True)
+        try:
+            await material_registry.publish(
+                material_id,
+                "error",
+                {"stage": "unknown", "message": str(exc), "at": datetime.now(timezone.utc).isoformat()},
+            )
+            db_client.update_material_status(material_id=material_id, status="failed")
+        except Exception:
+            pass
+    finally:
+        facade.close()
+        await material_registry.cleanup(material_id)
+
+
+@router.post("/knowledge/materials/{material_id}/reprocess", response_model=ApiResponse[dict])
+async def reprocess_material(
+    material_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[dict]:
+    """Trigger re-structuring workflow for a material file. Returns immediately; progress via SSE."""
+    trace_id = new_trace_id("reprocess")
+    db_client = SQLiteClient(username=current_username)
+    row = db_client.get_material_by_id(material_id)
+    if not row:
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_NOT_FOUND",
+            error_message=f"material {material_id} not found",
+            trace_id=trace_id,
+        )
+
+    file_path_rel: str | None = row.get("file_path")
+    if not file_path_rel:
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_FILE_MISSING",
+            error_message="material has no associated file path",
+            trace_id=trace_id,
+        )
+    full_path = (get_data_root() / current_username / file_path_rel).resolve()
+    if not full_path.exists():
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_FILE_MISSING",
+            error_message="material file not found on disk",
+            trace_id=trace_id,
+        )
+
+    if material_registry.is_active(material_id):
+        raise error_response(
+            status_code=409,
+            error_code="MATERIAL_ALREADY_PROCESSING",
+            error_message="material is already being processed",
+            trace_id=trace_id,
+        )
+
+    db_client.update_material_status(material_id=material_id, status="processing")
+    await material_registry.create(material_id)
+
+    task = asyncio.create_task(
+        _reprocess_bg(
+            material_id=material_id,
+            file_path=full_path,
+            username=current_username,
+            material_context=row.get("material_context", ""),
+            material_type=row.get("material_type", "document"),
+            trace_id=trace_id,
+        )
+    )
+    material_registry.register_task(material_id, task)
+
+    return ApiResponse(status="success", data={"material_id": material_id, "trace_id": trace_id})
+
+
+@router.post("/knowledge/materials/{material_id}/cancel", response_model=ApiResponse[dict])
+async def cancel_material_processing(
+    material_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[dict]:
+    """取消正在进行的结构化任务，将状态重置为 pending。"""
+    trace_id = new_trace_id("cancel-material")
+    db_client = SQLiteClient(username=current_username)
+    row = db_client.get_material_by_id(material_id)
+    if not row:
+        raise error_response(
+            status_code=404,
+            error_code="MATERIAL_NOT_FOUND",
+            error_message=f"material {material_id} not found",
+            trace_id=trace_id,
+        )
+
+    was_active = await material_registry.cancel_task(material_id)
+    await material_registry.cleanup(material_id)
+
+    # Reset to pending so the user can re-trigger later
+    db_client.update_material_status(material_id=material_id, status="pending")
+
+    return ApiResponse(status="success", data={"material_id": material_id, "was_active": was_active})
+
+
+@router.get("/knowledge/materials/{material_id}/events")
+async def stream_material_events(
+    material_id: str,
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> StreamingResponse:
+    """SSE stream for material processing progress (ingest→extract→vectorize→finalize)."""
+
+    async def event_stream():
+        queue = await material_registry.subscribe(material_id)
+        try:
+            yield _encode_sse("connected", {"material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
+
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    yield _encode_sse("heartbeat", {"material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
+                    continue
+
+                if msg is None:
+                    # Sentinel: processing finished or registry cleaned up
+                    break
+
+                event_name: str = msg.get("event", "status")
+                payload: dict[str, Any] = msg.get("payload", {})
+                yield _encode_sse(event_name, payload)
+
+                if event_name in ("completed", "error"):
+                    break
+
+        finally:
+            await material_registry.unsubscribe(material_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

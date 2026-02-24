@@ -12,7 +12,7 @@ export function EmotionalAnchorsPanel({ positiveTriggers, sensitiveTopics }: Pro
     <div className="flex flex-col h-full min-h-0">
       <p className="mb-3 shrink-0 text-xs uppercase tracking-[0.16em] text-[#A2845E]">情感锚点</p>
       {isEmpty ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-[var(--muted-fg)] text-center px-4">
+        <div className="flex flex-1 items-center justify-center text-sm text-slate-500 text-center px-4">
           开始采访，发送几条消息后辅助内容将自动出现
         </div>
       ) : (
@@ -21,7 +21,7 @@ export function EmotionalAnchorsPanel({ positiveTriggers, sensitiveTopics }: Pro
             <div>
               <p className="text-xs font-medium text-emerald-700 mb-2">积极触发点</p>
               {positiveTriggers.length === 0 ? (
-                <p className="text-xs text-[var(--muted-fg)]">暂无</p>
+                <p className="text-xs text-slate-500">暂无</p>
               ) : (
                 <div className="flex flex-wrap gap-1">
                   {positiveTriggers.map((tag, i) => (
@@ -38,7 +38,7 @@ export function EmotionalAnchorsPanel({ positiveTriggers, sensitiveTopics }: Pro
             <div>
               <p className="text-xs font-medium text-rose-700 mb-2">敏感话题</p>
               {sensitiveTopics.length === 0 ? (
-                <p className="text-xs text-[var(--muted-fg)]">暂无</p>
+                <p className="text-xs text-slate-500">暂无</p>
               ) : (
                 <div className="flex flex-wrap gap-1">
                   {sensitiveTopics.map((tag, i) => (

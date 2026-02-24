@@ -188,3 +188,50 @@ async def run_knowledge_file(
         "vector_database": result.get("vector_database", {}),
         "data_dir": result.get("data_dir", ""),
     }
+
+
+from collections.abc import AsyncIterator  # noqa: E402
+
+
+async def run_knowledge_file_stream(
+    workflow: KnowledgeWorkflow,
+    *,
+    file_path: Path,
+    username: str,
+    thread_id: str,
+    narrator_name: str | None = None,
+    verbose: bool = False,
+    material_type: str = "interview",
+    material_context: str = "",
+    material_id: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream knowledge workflow stage completions via LangGraph astream().
+
+    Yields dicts of the form::
+
+        {"node": "ingest"|"extract"|"vectorize"|"finalize", "output": state_delta}
+
+    The caller is responsible for translating node names to user-facing labels
+    and publishing them to an SSE registry.
+    """
+    initial_state: KnowledgeWorkflowState = {
+        "workflow_id": workflow.workflow_id,
+        "thread_id": thread_id,
+        "status": "received",
+        "errors": [],
+        "metadata": {},
+        "username": username,
+        "file_path": str(file_path),
+        "narrator_name": narrator_name or username,
+        "verbose": verbose,
+        "trace_id": thread_id,
+        "material_type": material_type,
+        "material_context": material_context,
+    }
+    if material_id:
+        initial_state["material_id"] = material_id
+
+    # LangGraph astream() yields {node_name: output_state_delta} for each node
+    async for chunk in workflow.astream(initial_state, thread_id=thread_id):
+        for node_name, output in chunk.items():
+            yield {"node": node_name, "output": output}

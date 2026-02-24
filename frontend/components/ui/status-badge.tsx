@@ -15,7 +15,7 @@ export function StatusBadge({ status, label }: Props) {
         "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em]",
         status === "success" && "border-emerald-200 bg-emerald-50 text-emerald-700",
         status === "error" && "border-rose-200 bg-rose-50 text-rose-700",
-        status === "loading" && "border-[#C4A882] bg-[#F5EDE4] text-[#7A6242]",
+        status === "loading" && "border-[#C4A882] bg-[#F5EDE4] text-[#A2845E]",
         status === "idle" && "border-slate-200 bg-slate-50 text-slate-500"
       )}
     >

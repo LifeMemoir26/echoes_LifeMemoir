@@ -26,7 +26,7 @@
 
 body {
   margin: 0;
-  background: var(--workspace-bg);
+  background: radial-gradient(circle at top, #FDF6EE 0%, #fafaf8 45%, #fafaf8 100%);
   color: var(--fg);
   font-family: var(--font-body);
   line-height: 1.6;

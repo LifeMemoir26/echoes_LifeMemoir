@@ -7,6 +7,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from ...core.config import InterviewAssistanceConfig
@@ -20,6 +21,10 @@ from ...application.workflows.interview import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -143,31 +148,131 @@ async def create_interview_session(
         runtime=runtime,
         thread_id=thread_id,
     )
-
-    initializer = getattr(runtime, "_initializer", None)
-    if initializer is not None:
-        asyncio.create_task(_bootstrap_pending_events(session))
-
+    # Bootstrap is now driven by the API layer (three concurrent tasks).
     return session
 
 
-async def _bootstrap_pending_events(session: InterviewSession) -> None:
+async def _bootstrap_pending_events(
+    session: InterviewSession,
+    session_id: str = "",
+    trace_id: str = "",
+) -> None:
     initializer = getattr(session.runtime, "_initializer", None)
     if initializer is None:
         return
 
     try:
-        candidates = await asyncio.wait_for(initializer.initialize_pending_events(), timeout=20)
+        candidates = await asyncio.wait_for(initializer.initialize_pending_events(), timeout=120)
         for candidate in candidates:
             await session.runtime.storage.add_pending_event(
                 summary=candidate.summary,
                 explored_content="",
                 is_priority=candidate.is_priority,
             )
+
+        # Publish SSE event so frontend can update the pending events panel
+        if session_id:
+            pending = await session.get_pending_events_summary()
+            from ...app.api.v1.session_registry import registry as _registry
+            await _registry.publish(
+                session_id,
+                "context",
+                {
+                    "trace_id": trace_id,
+                    "partial": "pending_events",
+                    "pending_events": pending,
+                    "at": _iso_now(),
+                },
+            )
     except asyncio.TimeoutError:
         logger.warning("pending event bootstrap timed out for interview session %s", session.thread_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("pending event bootstrap failed for interview session %s: %s", session.thread_id, exc)
+
+
+async def _bootstrap_supplements_bg(
+    session: InterviewSession,
+    session_id: str,
+    registry: object,
+    trace_id: str,
+) -> None:
+    """初始化事件补充信息：用人生事件全文 + 人物侧写生成，无需对话上下文。"""
+    try:
+        all_events = session.runtime.sqlite_client.get_all_events()
+        life_events_text = "\n".join(
+            f"[{e.get('year', '?')}] {e.get('event_summary', '')}: {e.get('event_details', '')}"
+            for e in all_events
+        ) if all_events else "暂无人生事件记录"
+        char_profile = session.runtime.sqlite_client.get_character_profile_text()
+
+        result = await session.runtime.supplement_extractor.generate_supplements(
+            raw_material=life_events_text,
+            summaries=[],
+            vector_results=[],
+            char_profile=char_profile,
+        )
+
+        session.runtime.storage.update_event_supplements(result.supplements)
+
+        from ...app.api.v1.session_registry import registry as _registry
+        await _registry.publish(
+            session_id,
+            "context",
+            {
+                "trace_id": trace_id,
+                "partial": "supplements",
+                "event_supplements": [s.model_dump() for s in result.supplements],
+                "at": _iso_now(),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "bootstrap supplements failed for session %s: %s", session.thread_id, exc, exc_info=True
+        )
+
+
+async def _bootstrap_anchors_bg(
+    session: InterviewSession,
+    session_id: str,
+    registry: object,
+    trace_id: str,
+) -> None:
+    """初始化情感锚点：用人生事件全文 + 人物侧写生成，无需对话上下文。"""
+    try:
+        all_events = session.runtime.sqlite_client.get_all_events()
+        life_events_text = "\n".join(
+            f"[{e.get('year', '?')}] {e.get('event_summary', '')}: {e.get('event_details', '')}"
+            for e in all_events
+        ) if all_events else "暂无人生事件记录"
+        char_profile = session.runtime.sqlite_client.get_character_profile_text()
+
+        result = await session.runtime.supplement_extractor.generate_anchors(
+            raw_material=life_events_text,
+            summaries=[],
+            vector_results=[],
+            char_profile=char_profile,
+        )
+
+        session.runtime.storage.update_interview_suggestions(
+            result.positive_triggers, result.sensitive_topics
+        )
+
+        from ...app.api.v1.session_registry import registry as _registry
+        await _registry.publish(
+            session_id,
+            "context",
+            {
+                "trace_id": trace_id,
+                "partial": "anchors",
+                "positive_triggers": result.positive_triggers,
+                "sensitive_topics": result.sensitive_topics,
+                "at": _iso_now(),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "bootstrap anchors failed for session %s: %s", session.thread_id, exc, exc_info=True
+        )
 
 
 async def add_dialogue(

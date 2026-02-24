@@ -107,6 +107,7 @@ class SQLiteClient:
             CREATE TABLE IF NOT EXISTS materials (
                 id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
+                display_name TEXT DEFAULT '',
                 material_type TEXT NOT NULL,
                 material_context TEXT DEFAULT '',
                 file_path TEXT,
@@ -131,6 +132,7 @@ class SQLiteClient:
             "ALTER TABLE life_events ADD COLUMN confidence TEXT DEFAULT 'high'",
             "ALTER TABLE life_events ADD COLUMN source_material_id TEXT",
             "ALTER TABLE character_profiles ADD COLUMN source_material_id TEXT",
+            "ALTER TABLE materials ADD COLUMN display_name TEXT DEFAULT ''",
         ]
         for stmt in migrations:
             try:
@@ -422,6 +424,13 @@ class SQLiteClient:
         cursor.execute("SELECT * FROM materials ORDER BY uploaded_at DESC")
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_material_by_id(self, material_id: str) -> Optional[Dict[str, Any]]:
+        """按 id 查找单条 material 记录，不存在返回 None"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM materials WHERE id = ?", (material_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def insert_material(
         self,
         material_id: str,
@@ -430,15 +439,17 @@ class SQLiteClient:
         material_context: str = "",
         file_path: str = "",
         file_size: int = 0,
+        display_name: str = "",
+        initial_status: str = "processing",
     ) -> None:
-        """插入新的 material 记录，初始状态为 processing"""
+        """插入新的 material 记录"""
         cursor = self.conn.cursor()
         cursor.execute(
             """
-            INSERT INTO materials (id, filename, material_type, material_context, file_path, file_size, status)
-            VALUES (?, ?, ?, ?, ?, ?, 'processing')
+            INSERT INTO materials (id, filename, display_name, material_type, material_context, file_path, file_size, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (material_id, filename, material_type, material_context, file_path, file_size),
+            (material_id, filename, display_name, material_type, material_context, file_path, file_size, initial_status),
         )
         self.conn.commit()
 
@@ -460,6 +471,18 @@ class SQLiteClient:
             (status, events_count, chunks_count, material_id),
         )
         self.conn.commit()
+
+    def delete_material(self, material_id: str) -> bool:
+        """删除 material 记录及其关联的事件和侧写，返回是否成功删除"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM materials WHERE id = ?", (material_id,))
+        if not cursor.fetchone():
+            return False
+        cursor.execute("DELETE FROM life_events WHERE source_material_id = ?", (material_id,))
+        cursor.execute("DELETE FROM character_profiles WHERE source_material_id = ?", (material_id,))
+        cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
+        self.conn.commit()
+        return True
 
     def close(self):
         """关闭数据库连接"""

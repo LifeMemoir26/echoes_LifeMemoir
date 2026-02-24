@@ -31,12 +31,7 @@ export function RegisterPage() {
   };
 
   return (
-    <div
-      className="flex min-h-screen flex-col"
-      style={{
-        background: "radial-gradient(circle at top, #FDF6EE 0%, #fafaf8 45%, #fafaf8 100%)"
-      }}
-    >
+    <div className="flex min-h-screen flex-col">
       <div className="mx-auto flex h-16 max-w-2xl w-full items-center px-6">
         <span className="font-[var(--font-heading)] text-xl text-[#A2845E]">ECHOES</span>
       </div>

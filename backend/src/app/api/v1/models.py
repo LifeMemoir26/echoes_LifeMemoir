@@ -167,6 +167,7 @@ class ProfileData(BaseModel):
 class MaterialItem(BaseModel):
     id: str
     filename: str
+    display_name: str = ""
     material_type: str
     material_context: str = ""
     file_path: str | None = None

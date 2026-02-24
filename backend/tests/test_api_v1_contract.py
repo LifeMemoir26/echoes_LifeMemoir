@@ -18,6 +18,15 @@ from src.app.api.v1.session_registry import registry
 class DummyInterviewSession:
     thread_id: str
 
+    def get_event_supplements(self):
+        return []
+
+    def get_interview_suggestions(self):
+        return None
+
+    async def get_pending_events_summary(self):
+        return {"total": 0, "priority_count": 0, "unexplored_count": 0, "events": []}
+
 
 async def _noop(*args, **kwargs):
     return None

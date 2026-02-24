@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
 from src.application.generate.api import generate_memoir, generate_timeline
+from src.core.paths import get_data_root
 
 from .deps import get_current_username
 from .errors import error_response, new_trace_id, normalize_workflow_failure
@@ -138,6 +141,61 @@ async def api_generate_memoir(
             username=str(result.get("username") or payload.username),
             memoir=memoir_text,
             length=int(result.get("length") or len(memoir_text)),
+            generated_at=generated_at,
+            trace_id=trace_id,
+        ),
+    )
+
+
+def _output_dir(username: str) -> Path:
+    return get_data_root() / username / "output"
+
+
+@router.get("/generate/timeline/saved", response_model=ApiResponse[TimelineGenerateData])
+async def api_get_saved_timeline(
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[TimelineGenerateData]:
+    """Read previously saved timeline from data/{user}/output/timeline.json."""
+    trace_id = new_trace_id("timeline-saved")
+    json_path = _output_dir(current_username) / "timeline.json"
+    if not json_path.exists():
+        return ApiResponse(status="success", data=None)
+
+    raw = json.loads(json_path.read_text(encoding="utf-8"))
+    generated_at = datetime.fromisoformat(raw.get("generated_at", datetime.utcnow().isoformat()))
+    timeline = raw.get("timeline", [])
+    return ApiResponse(
+        status="success",
+        data=TimelineGenerateData(
+            username=raw.get("username", current_username),
+            timeline=timeline,
+            event_count=len(timeline),
+            generated_at=generated_at,
+            trace_id=trace_id,
+        ),
+    )
+
+
+@router.get("/generate/memoir/saved", response_model=ApiResponse[MemoirGenerateData])
+async def api_get_saved_memoir(
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[MemoirGenerateData]:
+    """Read previously saved memoir from data/{user}/output/memoir.json."""
+    trace_id = new_trace_id("memoir-saved")
+    json_path = _output_dir(current_username) / "memoir.json"
+    if not json_path.exists():
+        return ApiResponse(status="success", data=None)
+
+    raw = json.loads(json_path.read_text(encoding="utf-8"))
+    generated_at = datetime.fromisoformat(raw.get("generated_at", datetime.utcnow().isoformat()))
+    # saved file uses "content", API contract uses "memoir"
+    memoir_text = str(raw.get("content") or raw.get("memoir") or "")
+    return ApiResponse(
+        status="success",
+        data=MemoirGenerateData(
+            username=raw.get("username", current_username),
+            memoir=memoir_text,
+            length=int(raw.get("length") or len(memoir_text)),
             generated_at=generated_at,
             trace_id=trace_id,
         ),

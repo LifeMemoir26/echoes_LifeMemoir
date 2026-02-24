@@ -1,8 +1,9 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiRequestError } from "@/lib/api/client";
-import { generateMemoir } from "@/lib/api/memoir";
+import { generateMemoir, getSavedMemoir } from "@/lib/api/memoir";
 import type { MemoirGenerateData, MemoirGenerateRequest, NormalizedApiError } from "@/lib/api/types";
 
 export type GenerateState = {
@@ -11,9 +12,21 @@ export type GenerateState = {
 };
 
 export function useGenerateMemoir() {
+  const [generatedData, setGeneratedData] = useState<MemoirGenerateData | null>(null);
+
+  // Load saved memoir via React Query (cached 5 min in memory)
+  const savedQuery = useQuery({
+    queryKey: ["memoir-saved"],
+    queryFn: ({ signal }) => getSavedMemoir(signal),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const mutation = useMutation<MemoirGenerateData, Error, MemoirGenerateRequest>({
     mutationFn: generateMemoir,
-    retry: false
+    retry: false,
+    onSuccess: (result) => {
+      setGeneratedData(result);
+    },
   });
 
   const normalizedError: NormalizedApiError | null =
@@ -29,8 +42,12 @@ export function useGenerateMemoir() {
           }
         : null;
 
+  // Use mutation result if available, otherwise fall back to saved data
+  const data = generatedData ?? mutation.data ?? (savedQuery.data ?? null);
+
   return {
     ...mutation,
+    data,
     normalizedError,
     canRetry: Boolean(normalizedError?.retryable)
   };

@@ -1,4 +1,4 @@
-import { apiGet, ApiRequestError, parseEnvelope, normalizeApiError, getAuthHeaders } from "@/lib/api/client";
+import { apiGet, apiPost, apiDelete, ApiRequestError, parseEnvelope, normalizeApiError, getAuthHeaders } from "@/lib/api/client";
 import type { ApiError } from "@/lib/api/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
@@ -43,6 +43,7 @@ export interface ProfileData {
 export interface MaterialItem {
   id: string;
   filename: string;
+  display_name: string;
   material_type: string;
   material_context: string;
   file_path: string | null;
@@ -99,14 +100,31 @@ export function listMaterials(): Promise<MaterialsListData> {
   return apiGet<MaterialsListData>("/knowledge/materials");
 }
 
+export function getMaterialContent(materialId: string): Promise<{ content: string }> {
+  return apiGet<{ content: string }>(`/knowledge/materials/${materialId}/content`);
+}
+
+export function triggerReprocess(materialId: string): Promise<{ material_id: string; trace_id: string }> {
+  return apiPost<{ material_id: string; trace_id: string }, Record<string, never>>(
+    `/knowledge/materials/${materialId}/reprocess`,
+    {}
+  );
+}
+
 export async function uploadMaterial(
   username: string,
   files: File[],
-  materialContext: string = ""
+  materialContext: string = "",
+  displayName: string = "",
+  skipProcessing: boolean = false
 ): Promise<MaterialUploadData> {
   const formData = new FormData();
   formData.append("username", username);
   formData.append("material_context", materialContext);
+  formData.append("display_name", displayName);
+  if (skipProcessing) {
+    formData.append("skip_processing", "true");
+  }
   for (const file of files) {
     formData.append("files", file);
   }
@@ -155,4 +173,15 @@ export async function uploadMaterial(
     message: `请求失败（HTTP ${response.status}）`,
     retryable: false,
   });
+}
+
+export function deleteMaterial(materialId: string): Promise<{ material_id: string }> {
+  return apiDelete<{ material_id: string }>(`/knowledge/materials/${materialId}`);
+}
+
+export function cancelStructuring(materialId: string): Promise<{ material_id: string; was_active: boolean }> {
+  return apiPost<{ material_id: string; was_active: boolean }, Record<string, never>>(
+    `/knowledge/materials/${materialId}/cancel`,
+    {}
+  );
 }

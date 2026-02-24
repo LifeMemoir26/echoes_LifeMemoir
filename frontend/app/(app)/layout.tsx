@@ -4,8 +4,10 @@ import { AppNav } from "@/components/layout/app-nav";
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthGuard>
-      <AppNav />
-      {children}
+      <div className="flex h-dvh flex-col overflow-hidden">
+        <AppNav />
+        <div className="flex-1 overflow-auto">{children}</div>
+      </div>
     </AuthGuard>
   );
 }

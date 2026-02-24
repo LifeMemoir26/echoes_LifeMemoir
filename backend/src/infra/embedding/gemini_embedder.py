@@ -23,6 +23,7 @@ class GeminiEmbedder:
         api_keys: List[str] | None = None,
         model: str = "models/gemini-embedding-001",
         batch_size: int = 100,
+        proxy: str = "",
     ):
         """
         初始化 GeminiEmbedder
@@ -32,10 +33,12 @@ class GeminiEmbedder:
             api_keys: 多个 Gemini API Key（轮换使用，覆盖 api_key）
             model: 嵌入模型名称
             batch_size: 每批最多发送的文本数（Gemini 限制 ≤ 100）
+            proxy: HTTP 代理地址（如 http://127.0.0.1:7890），为空则直连
         """
         self.model = model
         self.batch_size = batch_size
         self._key_index = 0
+        self._proxy = proxy or ""
 
         # 构建 key 列表
         if api_keys:
@@ -54,6 +57,7 @@ class GeminiEmbedder:
         logger.info(
             f"GeminiEmbedder 已初始化，模型: {model}，"
             f"批次大小: {batch_size}，密钥数量: {len(self._api_keys)}"
+            + (f"，代理: {proxy}" if proxy else "")
         )
 
     # ------------------------------------------------------------------
@@ -102,7 +106,12 @@ class GeminiEmbedder:
         key = self._api_keys[self._key_index % len(self._api_keys)]
         self._key_index += 1
         if key not in self._clients:
-            self._clients[key] = genai.Client(api_key=key)
+            kwargs: dict = {"api_key": key}
+            if self._proxy:
+                kwargs["http_options"] = {
+                    "client_args": {"proxy": self._proxy},
+                }
+            self._clients[key] = genai.Client(**kwargs)
         return self._clients[key]
 
     def _embed_with_retry(self, texts: List[str], task_type: str) -> List[List[float]]:

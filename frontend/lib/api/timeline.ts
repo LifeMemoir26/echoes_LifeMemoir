@@ -1,4 +1,4 @@
-import { ApiRequestError, apiPostWithSignal } from "@/lib/api/client";
+import { ApiRequestError, apiGet, apiPostWithSignal } from "@/lib/api/client";
 import type { TimelineGenerateData, TimelineGenerateRequest } from "@/lib/api/types";
 
 function validateTimelineData(data: TimelineGenerateData): TimelineGenerateData {
@@ -23,5 +23,12 @@ export async function generateTimeline(
   signal?: AbortSignal
 ): Promise<TimelineGenerateData> {
   const data = await apiPostWithSignal<TimelineGenerateData, TimelineGenerateRequest>("/generate/timeline", payload, signal);
+  return validateTimelineData(data);
+}
+
+/** Fetch previously saved timeline from disk. Returns null if none saved. */
+export async function getSavedTimeline(signal?: AbortSignal): Promise<TimelineGenerateData | null> {
+  const data = await apiGet<TimelineGenerateData | null>("/generate/timeline/saved", signal);
+  if (!data) return null;
   return validateTimelineData(data);
 }

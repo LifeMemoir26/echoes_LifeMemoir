@@ -28,3 +28,7 @@ data/
 .codex/
 openspec/
 .claude/
+
+# --- Build Cache & Runtime ---
+.pnpm-store/
+.log/

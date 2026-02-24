@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
+import { motion } from "framer-motion";
 import { BookOpen, CalendarDays, Library, MessageSquare, Upload } from "lucide-react";
 import { UploadMaterialModal } from "@/components/knowledge/upload-material-modal";
 import { useWorkspaceContext } from "@/lib/workspace/context";
@@ -39,18 +40,31 @@ export function DashboardPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
 
   return (
-    <div
-      className="flex min-h-screen flex-col"
-      style={{
-        background: "radial-gradient(circle at top, #FDF6EE 0%, #fafaf8 45%, #fafaf8 100%)"
-      }}
-    >
+    <div className="flex min-h-screen flex-col">
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-12">
+        {/* Page heading */}
+        <motion.div
+          className="mb-8"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+        >
+          <h1 className="font-[var(--font-heading)] text-3xl text-slate-900">
+            欢迎回来{username ? `，${username}` : ""}
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">选择一个功能开始你的回忆之旅</p>
+        </motion.div>
         <div className="grid gap-6 md:grid-cols-2">
-          {FEATURE_CARDS.map(({ href, icon: Icon, title, description }) => {
+          {FEATURE_CARDS.map(({ href, icon: Icon, title, description }, index) => {
             const isKnowledge = href === "/knowledge";
             return (
-              <div key={href} className="relative">
+              <motion.div
+                key={href}
+                className="relative"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, delay: 0.1 + index * 0.06 }}
+              >
                 <Link
                   href={href as Route}
                   className="group block cursor-pointer rounded-2xl border border-black/[0.06] bg-white/80 p-8 backdrop-blur-sm transition duration-200 hover:border-[#C4A882]"
@@ -76,7 +90,7 @@ export function DashboardPage() {
                     </div>
                   )}
                 </Link>
-              </div>
+              </motion.div>
             );
           })}
         </div>

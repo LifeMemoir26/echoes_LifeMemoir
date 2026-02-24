@@ -3,6 +3,41 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { clearToken, getToken, getSavedUsername, isTokenExpired } from "@/lib/auth/token";
+import type { NormalizedApiError, TimelineGenerateData, TimelineGenerateRequest } from "@/lib/api/types";
+
+// ── Timeline generation cache ────────────────────────────────────────────────
+export type TimelineGenerationPhase = "idle" | "pending" | "success" | "error";
+
+export type TimelineGenerationCache = {
+  phase: TimelineGenerationPhase;
+  data: TimelineGenerateData | null;
+  error: NormalizedApiError | null;
+  lastRequest: TimelineGenerateRequest | null;
+  savedAt: number; // Date.now()
+};
+
+// ── Interview messages cache ──────────────────────────────────────────────────
+export type SpeakerRole = "interviewer" | "interviewee";
+export type CachedMessage = { role: SpeakerRole; content: string; at: string };
+
+export type InterviewMessagesCache = {
+  sessionId: string;
+  messages: CachedMessage[];
+  savedAt: number;
+};
+
+// ── TTL ───────────────────────────────────────────────────────────────────────
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function isFresh(savedAt: number): boolean {
+  return Date.now() - savedAt < CACHE_TTL_MS;
+}
+
+function ssKey(prefix: string, username: string): string {
+  return `${prefix}_${username}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 type InterviewSummary = {
   status: string | null;
@@ -30,6 +65,11 @@ type WorkspaceContextValue = {
   setToken: (value: string | null) => void;
   isAuthenticated: boolean;
   logout: () => void;
+  // ── Cross-navigation state caches ──────────────────────────────────────────
+  timelineCache: TimelineGenerationCache | null;
+  setTimelineCache: (v: TimelineGenerationCache | null) => void;
+  interviewMessagesCache: InterviewMessagesCache | null;
+  setInterviewMessagesCache: (v: InterviewMessagesCache | null) => void;
 };
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -49,18 +89,71 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     generatedAt: null
   });
   const [token, setToken] = useState<string | null>(null);
+  const [timelineCache, setTimelineCache] = useState<TimelineGenerationCache | null>(null);
+  const [interviewMessagesCache, setInterviewMessagesCache] = useState<InterviewMessagesCache | null>(null);
 
-  // Initialise from localStorage after mount to avoid SSR hydration mismatch
+  // ── Bootstrap from localStorage (auth) + sessionStorage (caches) ──────────
   useEffect(() => {
     const stored = getToken();
     if (stored && !isTokenExpired(stored)) {
       setToken(stored);
       const savedUsername = getSavedUsername();
-      if (savedUsername) setUsername(savedUsername);
+      if (savedUsername) {
+        setUsername(savedUsername);
+
+        // Restore timeline cache
+        try {
+          const raw = sessionStorage.getItem(ssKey("tl_cache", savedUsername));
+          if (raw) {
+            const parsed: TimelineGenerationCache = JSON.parse(raw);
+            if (isFresh(parsed.savedAt)) {
+              // Pending requests can't be resumed — degrade to error
+              const restored: TimelineGenerationCache =
+                parsed.phase === "pending"
+                  ? { ...parsed, phase: "error", error: { code: "REQUEST_ABORTED", message: "页面刷新，请求已中断", retryable: true }, savedAt: parsed.savedAt }
+                  : parsed;
+              setTimelineCache(restored);
+            }
+          }
+        } catch { /* ignore malformed cache */ }
+
+        // Restore interview messages cache
+        try {
+          const raw = sessionStorage.getItem(ssKey("iv_cache", savedUsername));
+          if (raw) {
+            const parsed: InterviewMessagesCache = JSON.parse(raw);
+            if (isFresh(parsed.savedAt)) {
+              setInterviewMessagesCache(parsed);
+            }
+          }
+        } catch { /* ignore malformed cache */ }
+      }
     } else {
       clearToken();
     }
   }, []);
+
+  // ── Persist timeline cache to sessionStorage on change ───────────────────
+  useEffect(() => {
+    if (!username) return;
+    const key = ssKey("tl_cache", username);
+    if (timelineCache) {
+      try { sessionStorage.setItem(key, JSON.stringify(timelineCache)); } catch { /* quota */ }
+    } else {
+      sessionStorage.removeItem(key);
+    }
+  }, [timelineCache, username]);
+
+  // ── Persist interview messages cache to sessionStorage on change ──────────
+  useEffect(() => {
+    if (!username) return;
+    const key = ssKey("iv_cache", username);
+    if (interviewMessagesCache) {
+      try { sessionStorage.setItem(key, JSON.stringify(interviewMessagesCache)); } catch { /* quota */ }
+    } else {
+      sessionStorage.removeItem(key);
+    }
+  }, [interviewMessagesCache, username]);
 
   const isAuthenticated = token !== null && !isTokenExpired(token);
 
@@ -68,6 +161,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     clearToken();
     setToken(null);
     setUsername("");
+    setTimelineCache(null);
+    setInterviewMessagesCache(null);
     router.replace("/login");
   };
 
@@ -86,10 +181,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       token,
       setToken,
       isAuthenticated,
-      logout
+      logout,
+      timelineCache,
+      setTimelineCache,
+      interviewMessagesCache,
+      setInterviewMessagesCache,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeSessionId, interviewSummary, isAuthenticated, lastTraceId, timelineSummary, token, username]
+    [activeSessionId, interviewMessagesCache, interviewSummary, isAuthenticated, lastTraceId, timelineCache, timelineSummary, token, username]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

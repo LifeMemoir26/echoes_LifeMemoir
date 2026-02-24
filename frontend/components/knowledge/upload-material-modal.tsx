@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { X, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { Input } from "@/components/ui/input";
 import { uploadMaterial, type MaterialUploadItem } from "@/lib/api/knowledge-browser";
 
 interface Props {
@@ -17,7 +18,9 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [displayName, setDisplayName] = useState("");
   const [materialContext, setMaterialContext] = useState("");
+  const [skipProcessing, setSkipProcessing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<MaterialUploadItem[] | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -40,7 +43,7 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
     setGlobalError(null);
     setResults(null);
     try {
-      const data = await uploadMaterial(username, selectedFiles, materialContext);
+      const data = await uploadMaterial(username, selectedFiles, materialContext, displayName.trim(), skipProcessing);
       setResults(data.items);
       void queryClient.invalidateQueries({ queryKey: ["materials"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
@@ -54,13 +57,16 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
 
   const handleClose = () => {
     setSelectedFiles([]);
+    setDisplayName("");
     setMaterialContext("");
+    setSkipProcessing(false);
     setResults(null);
     setGlobalError(null);
     onClose();
   };
 
   const allDone = results !== null;
+  const canSubmit = selectedFiles.length > 0 && displayName.trim().length > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -79,6 +85,20 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
 
         {!allDone ? (
           <>
+            {/* Display name (required) */}
+            <div className="mb-4">
+              <p className="mb-2 text-xs uppercase tracking-[0.16em] text-[#A2845E]">
+                存储文件名<span className="ml-1 normal-case text-rose-400">必填</span>
+              </p>
+              <Input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                disabled={submitting}
+                placeholder="例：2023年日记、高中回忆录"
+              />
+            </div>
+
             {/* File selection */}
             <div className="mb-4">
               <p className="mb-2 text-xs uppercase tracking-[0.16em] text-[#A2845E]">选择文件</p>
@@ -121,7 +141,7 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
             </div>
 
             {/* Context textarea */}
-            <div className="mb-5">
+            <div className="mb-4">
               <p className="mb-2 text-xs uppercase tracking-[0.16em] text-[#A2845E]">背景说明（可选）</p>
               <textarea
                 value={materialContext}
@@ -129,9 +149,24 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
                 disabled={submitting}
                 placeholder='文中的"XX"指的是我，写于...年代...'
                 rows={3}
-                className="w-full rounded-xl border border-[#C4A882]/40 bg-white px-3 py-2 text-sm text-slate-700 placeholder-slate-300 outline-none transition focus:border-[#A2845E] focus:ring-2 focus:ring-[rgba(162,132,94,0.3)] disabled:opacity-50"
+                className="focus-visible-ring w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 disabled:opacity-50"
               />
             </div>
+
+            {/* Skip processing checkbox */}
+            <label className="mb-5 flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={skipProcessing}
+                onChange={(e) => setSkipProcessing(e.target.checked)}
+                disabled={submitting}
+                className="h-4 w-4 rounded border-[#C4A882]/40 text-[#A2845E] accent-[#A2845E]"
+              />
+              <span className="text-sm text-slate-600">
+                稍后处理
+                <span className="ml-1 text-xs text-slate-400">（仅保存文件，之后在知识库页面手动结构化）</span>
+              </span>
+            </label>
 
             {globalError && (
               <p className="mb-4 text-sm text-rose-600">{globalError}</p>
@@ -145,9 +180,9 @@ export function UploadMaterialModal({ open, onClose, username }: Props) {
               <Button
                 size="sm"
                 onClick={handleSubmit}
-                disabled={submitting || selectedFiles.length === 0}
+                disabled={submitting || !canSubmit}
               >
-                {submitting ? "处理中…" : "开始处理"}
+                {submitting ? "处理中…" : skipProcessing ? "仅上传" : "开始处理"}
               </Button>
             </div>
           </>
