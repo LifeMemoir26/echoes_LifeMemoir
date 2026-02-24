@@ -86,11 +86,12 @@ class SessionRegistry:
 
     async def close(self, session_id: str) -> SessionRecord | None:
         async with self._lock:
-            record = self._by_session_id.get(session_id)
+            record = self._by_session_id.pop(session_id, None)
             if not record:
                 return None
             record.active = False
-            self._by_username.pop(record.username, None)
+            if self._by_username.get(record.username) is record:
+                self._by_username.pop(record.username, None)
             return record
 
     async def publish(self, session_id: str, event: str, payload: dict[str, Any]) -> SessionEvent | None:
