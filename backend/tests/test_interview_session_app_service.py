@@ -178,6 +178,7 @@ def test_iter_stream_events_heartbeat_then_idle_timeout():
 
         assert got[0]["event"] == "connected"
         assert got[1]["event"] == "context"
+        assert got[1]["payload"]["session_id"] == "sess-1"
         assert any(x["event"] == "completed" and x["payload"].get("status") == "idle_timeout" for x in got)
         assert registry.unsubscribed is True
 

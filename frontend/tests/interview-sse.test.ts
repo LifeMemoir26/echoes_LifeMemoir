@@ -2,6 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { connectInterviewSse } from "@/lib/api/interview-sse";
 
+function makeSseResponse(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    }
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" }
+  });
+}
+
 describe("api/interview-sse connect errors", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -49,5 +65,28 @@ describe("api/interview-sse connect errors", () => {
         retryable: true
       }
     } satisfies Partial<ApiRequestError>);
+  });
+
+  it("parses initial context event with session_id", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      makeSseResponse([
+        'id: 0\nevent: context\ndata: {"session_id":"sess-1","trace_id":"thread-1","pending_events":{"total":0,"priority_count":0,"unexplored_count":0,"events":[]}}\n\n'
+      ])
+    );
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const handle = await connectInterviewSse({ sessionId: "sess-1" }, (evt) => {
+      events.push({ event: evt.event, data: evt.data as Record<string, unknown> });
+    });
+    await handle.done;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: "context",
+      data: {
+        session_id: "sess-1",
+        trace_id: "thread-1"
+      }
+    });
   });
 });

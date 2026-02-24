@@ -134,6 +134,7 @@ class InterviewSessionAppService:
                     "event": "context",
                     "event_id": 0,
                     "payload": {
+                        "session_id": session_id,
                         "trace_id": record.thread_id,
                         "event_supplements": [s.model_dump() for s in (supplements or [])],
                         "positive_triggers": suggestions.positive_triggers if suggestions else [],

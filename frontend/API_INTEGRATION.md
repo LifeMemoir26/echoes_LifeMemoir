@@ -66,6 +66,7 @@ All subsequent endpoints require `Authorization: Bearer <token>` header.
 - `GET /session/{session_id}/events` (SSE)
   - First event is always `connected`.
   - Event types: `heartbeat`, `status`, `context`, `error`, `completed`.
+  - `context` payload（包括初始快照 event_id=0）始终包含 `session_id` 与 `trace_id`，字段形状与前端 `InterviewStreamContext` 对齐。
   - Reconnect with header `Last-Event-ID` to resume from last received event id.
 
 ## Knowledge Management
