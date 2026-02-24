@@ -1,3 +1,5 @@
+import pytest
+
 from src.application.auth.service import AuthService
 
 
@@ -28,8 +30,22 @@ def test_register_duplicate():
     db = FakeDB()
     svc = AuthService(db=db)
     svc.register("alice", "password123")
-    try:
+
+    with pytest.raises(ValueError, match="USERNAME_TAKEN"):
         svc.register("alice", "password123")
-        assert False, "expected duplicate"
-    except ValueError as exc:
-        assert str(exc) == "USERNAME_TAKEN"
+
+
+def test_register_invalid_username_rejected():
+    svc = AuthService(db=FakeDB())
+
+    with pytest.raises(ValueError, match="INVALID_USERNAME"):
+        svc.register("alice!", "password123")
+
+
+def test_login_invalid_credentials_rejected():
+    db = FakeDB()
+    svc = AuthService(db=db)
+    svc.register("alice", "password123")
+
+    with pytest.raises(ValueError, match="INVALID_CREDENTIALS"):
+        svc.login("alice", "wrong-password")

@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run",
     "check:contract": "node ./scripts/check-contract-parity.mjs"
   },
   "dependencies": {
@@ -32,7 +33,9 @@
     "@types/react-dom": "^19.0.3",
     "eslint": "^9.19.0",
     "eslint-config-next": "^16.1.0",
+    "jsdom": "^26.1.0",
     "tailwindcss": "^4.2.0",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.4"
   }
 }
