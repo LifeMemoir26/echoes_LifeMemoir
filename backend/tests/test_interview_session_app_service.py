@@ -171,7 +171,7 @@ def test_iter_stream_events_heartbeat_then_idle_timeout():
             "sess-1",
             q,
             resume_from=None,
-            heartbeat_seconds=0,
+            heartbeat_seconds=0.01,
             idle_timeout_seconds=1,
         ):
             got.append(evt)
