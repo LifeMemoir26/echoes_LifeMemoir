@@ -5,11 +5,10 @@ import { RefreshCw, X } from "lucide-react";
 import { useInterviewEvents } from "@/lib/hooks/use-interview-events";
 import { useInterviewSession } from "@/lib/hooks/use-interview-session";
 import { useWorkspaceContext } from "@/lib/workspace/context";
-import type { EventSupplementItem, PendingEventDetail } from "@/lib/api/types";
-import { togglePendingEventPriority } from "@/lib/api/interview";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { InterviewSidePanels } from "./interview-side-panels";
+import { useInterviewPanelState } from "./use-interview-panel-state";
 import { VoiceRecordPanel } from "./voice-record-panel";
 
 type SpeakerRole = "interviewer" | "interviewee";
@@ -67,19 +66,22 @@ export function InterviewPage() {
     }
   }, [interviewMessagesCache, activeSessionId]);
 
-  const [supplements, setSupplements] = useState<EventSupplementItem[]>([]);
-  const [pendingEvents, setPendingEvents] = useState<PendingEventDetail[]>([]);
-  const [positiveTriggers, setPositiveTriggers] = useState<string[]>([]);
-  const [sensitiveTopics, setSensitiveTopics] = useState<string[]>([]);
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-
-  // Per-panel loading state: false = loading (bootstrap not yet arrived), true = has data
-  const [supplementsLoaded, setSupplementsLoaded] = useState(false);
-  const [pendingEventsLoaded, setPendingEventsLoaded] = useState(false);
-  const [anchorsLoaded, setAnchorsLoaded] = useState(false);
 
   const isConnected = session !== null && state !== "closed" && state !== "idle_timeout";
   const isProcessing = state === "processing" || state === "flushing";
+
+  const {
+    supplements,
+    pendingEvents,
+    positiveTriggers,
+    sensitiveTopics,
+    expandedIds,
+    supplementsLoaded,
+    pendingEventsLoaded,
+    anchorsLoaded,
+    handleToggle,
+    handleTogglePriority,
+  } = useInterviewPanelState(contextEvent, session?.session_id, isConnected);
 
   // Merge consecutive same-speaker messages for display
   const mergedMessages = useMemo(() => mergeConsecutiveMessages(messages), [messages]);
@@ -106,71 +108,11 @@ export function InterviewPage() {
     if (completedEvent) syncFromServerEvent(completedEvent.status, completedEvent.session_id);
   }, [completedEvent, syncFromServerEvent]);
 
-  useEffect(() => {
-    if (!contextEvent) return;
-
-    if (contextEvent.partial === "pending_events") {
-      const events = contextEvent.pending_events?.events ?? [];
-      setPendingEvents(events);
-      setPendingEventsLoaded(true);
-      const incomingIds = new Set(events.map((e) => e.id));
-      setExpandedIds((prev) => {
-        const pruned = new Set<string>();
-        prev.forEach((id) => {
-          if (incomingIds.has(id)) pruned.add(id);
-        });
-        return pruned;
-      });
-      return;
-    }
-
-    if (contextEvent.partial === "supplements") {
-      setSupplements(contextEvent.event_supplements ?? []);
-      setSupplementsLoaded(true);
-      return;
-    }
-
-    if (contextEvent.partial === "anchors") {
-      setPositiveTriggers(contextEvent.positive_triggers ?? []);
-      setSensitiveTopics(contextEvent.sensitive_topics ?? []);
-      setAnchorsLoaded(true);
-      return;
-    }
-
-    // Full update (no partial field) — backward-compatible path
-    setSupplements(contextEvent.event_supplements ?? []);
-    setSupplementsLoaded(true);
-    setPositiveTriggers(contextEvent.positive_triggers ?? []);
-    setSensitiveTopics(contextEvent.sensitive_topics ?? []);
-    setAnchorsLoaded(true);
-
-    const events = contextEvent.pending_events?.events ?? [];
-    setPendingEvents(events);
-    setPendingEventsLoaded(true);
-
-    const incomingIds = new Set(events.map((e) => e.id));
-    setExpandedIds((prev) => {
-      const pruned = new Set<string>();
-      prev.forEach((id) => {
-        if (incomingIds.has(id)) pruned.add(id);
-      });
-      return pruned;
-    });
-  }, [contextEvent]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, state]);
 
-  // Reset per-panel loading flags when a new session is created
-  useEffect(() => {
-    if (isConnected) {
-      setSupplementsLoaded(false);
-      setPendingEventsLoaded(false);
-      setAnchorsLoaded(false);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.session_id]);
 
   const handleCreate = useCallback(async () => {
     if (!username) return;
@@ -182,29 +124,6 @@ export function InterviewPage() {
     await forceCreate(username);
   }, [forceCreate, username]);
 
-  const handleToggle = useCallback((id: string) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
-  const handleTogglePriority = useCallback(
-    (eventId: string) => {
-      if (!session?.session_id) return;
-      // Optimistic: flip locally for instant feedback
-      setPendingEvents((prev) =>
-        prev.map((e) => (e.id === eventId ? { ...e, is_priority: !e.is_priority } : e)),
-      );
-      // Fire-and-forget; SSE will push the authoritative list
-      togglePendingEventPriority(session.session_id, eventId).catch(() => {
-        // Revert on failure — SSE will correct eventually anyway
-      });
-    },
-    [session?.session_id],
-  );
 
   const statusLabel = isProcessing
     ? { status: "loading" as const, text: "处理中" }
