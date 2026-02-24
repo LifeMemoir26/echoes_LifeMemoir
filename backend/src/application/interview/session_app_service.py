@@ -199,7 +199,7 @@ class InterviewSessionAppService:
                 trace_id=f"session-{session_id}",
             )
 
-        new_priority = not event.is_priority
+        new_priority = event.toggle_priority()
         await storage.set_pending_event_priority(event_id, new_priority)
         await storage.reorder_pending_events()
 

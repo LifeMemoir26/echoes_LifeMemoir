@@ -30,11 +30,29 @@ class PendingEvent:
     
     在采访过程中维护的待探索事件，包含探索进度。
     使用 dataclass 以便于快速更新和访问。
+
+    领域规则：
+    - 排序优先级：优先事件在前；同优先级下，已探索内容更少的在前
+    - 优先级切换：由实体自身负责状态翻转，避免散落在 application 层
     """
     id: str                         # 事件唯一标识
     summary: str                    # 事件摘要（简短描述）
     explored_content: str = ""      # 已经探索的内容（累积）
     is_priority: bool = False       # 是否优先探索
+
+    def toggle_priority(self) -> bool:
+        """切换优先级并返回新值。"""
+        self.is_priority = not self.is_priority
+        return self.is_priority
+
+    def order_key(self) -> tuple[bool, int]:
+        """领域排序键：优先在前，探索内容更少在前。"""
+        return (not self.is_priority, len(self.explored_content))
+
+    @property
+    def is_unexplored(self) -> bool:
+        """是否尚未探索。"""
+        return not self.explored_content
     
     def __str__(self) -> str:
         """格式化输出，便于日志和调试"""

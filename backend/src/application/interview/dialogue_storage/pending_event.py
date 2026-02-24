@@ -164,7 +164,7 @@ class PendingEventManager:
             未探索事件列表
         """
         async with self._lock:
-            return [e for e in self._events if not e.explored_content]
+            return [e for e in self._events if e.is_unexplored]
     
     async def update(
         self, 
@@ -278,12 +278,7 @@ class PendingEventManager:
         - 已探索较少的事件排在已探索较多的前面
         """
         async with self._lock:
-            self._events.sort(
-                key=lambda e: (
-                    not e.is_priority,  # False (优先) 排在 True (非优先) 前面
-                    len(e.explored_content)  # 字数少的排在前面
-                )
-            )
+            self._events.sort(key=lambda e: e.order_key())
             logger.debug(f"Reordered {len(self._events)} pending events")
     
     async def remove(self, event_id: str) -> bool:
