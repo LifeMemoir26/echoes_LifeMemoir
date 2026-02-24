@@ -165,14 +165,25 @@ class WorkflowFacade:
         thread_id: str,
         speaker: str | None = None,
         content: str | None = None,
+        flush: bool = False,
     ) -> dict[str, Any]:
         workflow = self._get_interview_workflow()
-        return await run_interview_step(
+        result = await run_interview_step(
             workflow,
             thread_id=thread_id,
             speaker=speaker,
             content=content,
         )
+
+        if flush:
+            workflow.runtime.storage.trigger_summary_update_if_ready(
+                session_id=thread_id,
+                registry=None,
+                trace_id="facade_flush",
+                summary_processor=workflow.runtime.summary_processor,
+            )
+
+        return result
 
     async def execute_workflow(
         self,
