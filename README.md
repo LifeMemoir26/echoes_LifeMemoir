@@ -51,6 +51,8 @@ cp .env.example .env
 #### 3. 安装依赖 & 启动
 
 ```bash
+cd backend
+
 uv venv
 
 source .venv/bin/activate          # macOS / Linux
@@ -59,7 +61,7 @@ source .venv/bin/activate          # macOS / Linux
 
 uv pip install .
 
-uvicorn src.app.main:app --reload --port 8000
+python -m uvicorn src.app.main:app --reload --port 8000
 ```
 
 > 激活成功后提示符前会出现 `(.venv)`。
@@ -88,14 +90,14 @@ pnpm run dev
 在仓库根目录执行：
 
 ```bash
-# 后端（低负载）
-./scripts/check_backend.sh
-
-# 前端（低负载）
-./scripts/check_frontend.sh
-
 # 一键执行前后端低负载检查
 ./scripts/check_quick.sh
+
+# 后端（低负载）
+# ./scripts/check_backend.sh
+
+# 前端（低负载）
+# ./scripts/check_frontend.sh
 ```
 
 低负载检查默认只覆盖高频问题：
@@ -110,8 +112,10 @@ pnpm run dev
 如需完整回归，请手动执行全量测试：
 
 ```bash
-cd backend && PYTHONPATH=. ./.venv/bin/pytest -q tests
-cd frontend && pnpm -s check:contract
+cd backend
+uv pip install --python .venv/bin/python pytest
+PYTHONPATH=. ./.venv/bin/pytest -q tests
+cd ../frontend && pnpm -s check:contract
 ```
 
 # 深入了解

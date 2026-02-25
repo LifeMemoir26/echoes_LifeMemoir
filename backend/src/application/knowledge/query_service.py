@@ -19,12 +19,33 @@ from src.infra.storage.material_store import MaterialStore
 
 logger = logging.getLogger(__name__)
 
-_STAGE_LABELS: dict[str, str] = {
-    "ingest": "读取文件",
-    "extract": "提取事件",
-    "vectorize": "向量化",
-    "finalize": "完成",
-}
+_STAGE_SEQUENCE: list[tuple[str, str]] = [
+    ("ingest", "文件读取"),
+    ("extract", "知识提取"),
+    ("vectorize", "向量化存储"),
+    ("completed", "完成"),
+]
+
+_STAGE_INDEX: dict[str, int] = {stage: idx + 1 for idx, (stage, _label) in enumerate(_STAGE_SEQUENCE)}
+_STAGE_LABELS: dict[str, str] = dict(_STAGE_SEQUENCE)
+
+
+def _build_stage_payload(stage: str, *, at: str | None = None, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "stage": stage,
+        "label": _STAGE_LABELS.get(stage, stage),
+        "stage_index": _STAGE_INDEX.get(stage, 0),
+        "stage_total": len(_STAGE_SEQUENCE),
+        "at": at or datetime.now(timezone.utc).isoformat(),
+    }
+    payload.update(extra)
+    return payload
+
+
+def _resolve_material_display_name(*, material_type: str, display_name: str, filename: str, file_path: str | None) -> str:
+    if material_type == "interview":
+        return "采访记录"
+    return display_name.strip() or filename
 
 
 class KnowledgeQueryService:
@@ -177,6 +198,12 @@ class KnowledgeQueryService:
                     material_type=material_type,
                     display_name=display_name,
                 )
+                normalized_display_name = _resolve_material_display_name(
+                    material_type=material_type,
+                    display_name=display_name,
+                    filename=upload.filename,
+                    file_path=rel_path,
+                )
                 db_client.insert_material(
                     material_id=material_id,
                     filename=upload.filename,
@@ -184,7 +211,7 @@ class KnowledgeQueryService:
                     material_context=material_context,
                     file_path=rel_path,
                     file_size=len(content),
-                    display_name=display_name,
+                    display_name=normalized_display_name,
                     initial_status=MaterialLifecycle.initial_status(skip_processing=skip_processing),
                 )
 
@@ -222,7 +249,12 @@ class KnowledgeQueryService:
             {
                 "id": row["id"],
                 "filename": row["filename"],
-                "display_name": row.get("display_name", ""),
+                "display_name": _resolve_material_display_name(
+                    material_type=row["material_type"],
+                    display_name=row.get("display_name", ""),
+                    filename=row["filename"],
+                    file_path=row.get("file_path"),
+                ),
                 "material_type": row["material_type"],
                 "material_context": row.get("material_context", ""),
                 "file_path": row.get("file_path"),
@@ -303,6 +335,11 @@ class KnowledgeQueryService:
         db_client = SQLiteClient(username=username)
         facade = WorkflowFacade(username=username)
         try:
+            # Publish the initial running stage immediately. The workflow stream
+            # emits node outputs when a node finishes, but the UI needs to show
+            # the currently running stage in real time.
+            await material_registry.publish(material_id, "status", _build_stage_payload("ingest"))
+
             workflow = facade._get_knowledge_workflow()
             async for chunk in run_knowledge_file_stream(
                 workflow,
@@ -316,18 +353,43 @@ class KnowledgeQueryService:
                 node_name: str = chunk.get("node", "")
                 output: dict[str, Any] = chunk.get("output", {})
                 if output.get("status") == "failed":
-                    await material_registry.publish(material_id, "error", {"stage": node_name, "message": str(output.get("errors", "unknown error")), "at": datetime.now(timezone.utc).isoformat()})
+                    failed_stage_map = {
+                        "ingest": "ingest",
+                        "extract": "extract",
+                        "vectorize": "vectorize",
+                        "finalize": "completed",
+                    }
+                    await material_registry.publish(
+                        material_id,
+                        "error",
+                        _build_stage_payload(
+                            failed_stage_map.get(node_name, "completed"),
+                            message=str(output.get("errors", "unknown error")),
+                            failed_node=node_name,
+                        ),
+                    )
                     db_client.update_material_status(
                         material_id=material_id,
                         status=MaterialLifecycle.failed_status(),
                     )
                     return
-                await material_registry.publish(material_id, "status", {"stage": node_name, "label": _STAGE_LABELS.get(node_name, node_name), "at": datetime.now(timezone.utc).isoformat()})
+
+                # When one node finishes, the workflow has moved to the next
+                # stage. Emit that next stage so progress reflects "current"
+                # processing instead of "last finished".
+                if node_name == "ingest":
+                    await material_registry.publish(material_id, "status", _build_stage_payload("extract"))
+                elif node_name == "extract":
+                    await material_registry.publish(material_id, "status", _build_stage_payload("vectorize"))
 
             row = db_client.get_material_by_id(material_id)
             events_count = row.get("events_count", 0) if row else 0
             chunks_count = row.get("chunks_count", 0) if row else 0
-            await material_registry.publish(material_id, "completed", {"events_count": events_count, "chunks_count": chunks_count, "at": datetime.now(timezone.utc).isoformat()})
+            await material_registry.publish(
+                material_id,
+                "completed",
+                _build_stage_payload("completed", events_count=events_count, chunks_count=chunks_count),
+            )
             db_client.update_material_status(
                 material_id=material_id,
                 status=MaterialLifecycle.completed_status(),
@@ -336,7 +398,11 @@ class KnowledgeQueryService:
             )
         except Exception as exc:
             logger.error("_reprocess_bg failed for material %s: %s", material_id, exc, exc_info=True)
-            await material_registry.publish(material_id, "error", {"stage": "unknown", "message": str(exc), "at": datetime.now(timezone.utc).isoformat()})
+            await material_registry.publish(
+                material_id,
+                "error",
+                _build_stage_payload("unknown", message=str(exc)),
+            )
             db_client.update_material_status(
                 material_id=material_id,
                 status=MaterialLifecycle.failed_status(),

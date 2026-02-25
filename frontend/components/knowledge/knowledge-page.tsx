@@ -14,8 +14,9 @@ import { UploadMaterialModal } from "@/components/knowledge/upload-material-moda
 import type { MaterialItem } from "@/lib/api/knowledge";
 import { softSpring } from "@/lib/motion/spring";
 import { knowledgeQueryKeys } from "@/lib/query-keys";
+import { formatArchiveAtHour, resolveMaterialDisplayName } from "@/lib/knowledge/material-display-name";
 
-const STAGE_ORDER = ["读取文件", "提取事件", "向量化", "完成"] as const;
+const STAGE_ORDER = ["文件读取", "知识提取", "向量化存储", "完成"] as const;
 
 function StructuringProgress({ stage }: { stage: string | null }) {
   const current = STAGE_ORDER.indexOf(stage as typeof STAGE_ORDER[number]);
@@ -48,8 +49,8 @@ function FileCard({ item, index }: { item: MaterialItem; index: number }) {
   const [deleting, setDeleting] = useState(false);
   const queryClient = useQueryClient();
   const contentQuery = useKnowledgeMaterialContent(expanded ? item.id : null);
-  const { isProcessing, stage, error: structuringError, trigger, cancel } = useKnowledgeStructuring(item.id);
-  const label = item.display_name || item.filename;
+  const { isProcessing, stage, error: structuringError, trigger, cancel } = useKnowledgeStructuring(item.id, item.status);
+  const label = resolveMaterialDisplayName(item);
 
   const effectiveStatus = isProcessing ? "processing" : item.status;
 
@@ -85,7 +86,7 @@ function FileCard({ item, index }: { item: MaterialItem; index: number }) {
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-slate-700">{label}</p>
             <p className="mt-0.5 text-xs text-slate-400">
-              存档于 {item.uploaded_at.slice(0, 10)}
+              存档于 {formatArchiveAtHour(item.uploaded_at)}
             </p>
             {isProcessing && <StructuringProgress stage={stage} />}
             {structuringError && !isProcessing && (

@@ -76,7 +76,7 @@ describe("useKnowledgeStructuring", () => {
     });
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       makeSseResponse([
-        'event: status\ndata: {"label":"提取事件"}\n\n',
+        'event: status\ndata: {"stage":"extract","label":"知识提取"}\n\n',
         'event: error\ndata: {"message":"解析失败"}\n\n',
       ]),
     );
@@ -95,5 +95,29 @@ describe("useKnowledgeStructuring", () => {
 
     expect(result.current.stage).toBeNull();
     expect(result.current.error).toBe("解析失败");
+  });
+
+  it("restores processing lock from server status after remount", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      makeSseResponse([
+        'event: status\ndata: {"stage":"vectorize","label":"向量化存储"}\n\n',
+        'event: completed\ndata: {"stage":"completed","label":"完成"}\n\n',
+      ]),
+    );
+
+    const { result } = renderHook(() => useKnowledgeStructuring("mat-2", "processing"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isProcessing).toBe(true);
+    });
+
+    await waitFor(() => {
+      expect(result.current.isProcessing).toBe(false);
+    });
+
+    expect(result.current.stage).toBe("完成");
+    expect(result.current.error).toBeNull();
   });
 });

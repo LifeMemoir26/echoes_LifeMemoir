@@ -57,3 +57,115 @@ def test_list_records_maps_preview_and_lengths(monkeypatch: pytest.MonkeyPatch):
     assert rows[0]["preview"] == long_text[:120]
     assert rows[0]["total_chars"] == 200
     assert rows[0]["is_structured"] is True
+
+
+def test_list_materials_normalizes_display_name_rules(monkeypatch: pytest.MonkeyPatch):
+    class FakeSQLiteClient:
+        def __init__(self, username: str):
+            assert username == "alice"
+
+        def get_all_materials(self):
+            return [
+                {
+                    "id": "m1",
+                    "filename": "raw-interview.txt",
+                    "display_name": "用户随便填",
+                    "material_type": "interview",
+                    "material_context": "",
+                    "file_path": "materials/采访记录-20260225T091800",
+                    "file_size": 12,
+                    "status": "done",
+                    "events_count": 1,
+                    "chunks_count": 1,
+                    "uploaded_at": "2026-02-25T01:18:00Z",
+                    "processed_at": None,
+                },
+                {
+                    "id": "m2",
+                    "filename": "origin.txt",
+                    "display_name": "我的文档名",
+                    "material_type": "document",
+                    "material_context": "",
+                    "file_path": "materials/我的文档名-20260225T091801",
+                    "file_size": 34,
+                    "status": "done",
+                    "events_count": 2,
+                    "chunks_count": 3,
+                    "uploaded_at": "2026-02-25T01:18:01Z",
+                    "processed_at": None,
+                },
+            ]
+
+    monkeypatch.setattr(qs_mod, "SQLiteClient", FakeSQLiteClient)
+
+    svc = KnowledgeQueryService()
+    rows = svc.list_materials("alice")
+
+    assert rows[0]["display_name"] == "采访记录"
+    assert rows[1]["display_name"] == "我的文档名"
+
+
+def test_reprocess_publishes_unified_stage_payload(monkeypatch: pytest.MonkeyPatch):
+    import asyncio
+
+    published: list[tuple[str, dict]] = []
+
+    class FakeRegistry:
+        async def publish(self, material_id: str, event: str, payload: dict):
+            published.append((event, payload))
+
+        async def cleanup(self, material_id: str):
+            return None
+
+    class FakeSQLiteClient:
+        def __init__(self, username: str):
+            pass
+
+        def get_material_by_id(self, material_id: str):
+            return {"events_count": 5, "chunks_count": 8}
+
+        def update_material_status(self, **kwargs):
+            return None
+
+    class FakeFacade:
+        def __init__(self, username: str):
+            pass
+
+        def _get_knowledge_workflow(self):
+            return object()
+
+        def close(self):
+            return None
+
+    async def fake_stream(*args, **kwargs):
+        yield {"node": "ingest", "output": {"status": "ok"}}
+        yield {"node": "extract", "output": {"status": "ok"}}
+        yield {"node": "vectorize", "output": {"status": "ok"}}
+
+    monkeypatch.setattr(qs_mod, "SQLiteClient", FakeSQLiteClient)
+    monkeypatch.setattr(qs_mod, "WorkflowFacade", FakeFacade)
+    monkeypatch.setattr(qs_mod, "run_knowledge_file_stream", fake_stream)
+
+    svc = KnowledgeQueryService()
+    asyncio.run(
+        svc._reprocess_bg(
+            material_id="m1",
+            file_path=Path("/tmp/placeholder.txt"),
+            username="alice",
+            material_context="",
+            material_type="document",
+            trace_id="trace-1",
+            material_registry=FakeRegistry(),
+        )
+    )
+
+    status_events = [p for e, p in published if e == "status"]
+    completed_events = [p for e, p in published if e == "completed"]
+
+    assert [e["stage"] for e in status_events] == [
+        "ingest",
+        "extract",
+        "vectorize",
+    ]
+    assert all("stage_index" in e and "stage_total" in e for e in status_events)
+    assert completed_events[0]["stage"] == "completed"

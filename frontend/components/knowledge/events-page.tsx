@@ -6,6 +6,7 @@ import { CalendarDays, ChevronDown, ChevronUp } from "lucide-react";
 import { useKnowledgeEvents } from "@/lib/hooks/use-knowledge-events";
 import type { EventItem } from "@/lib/api/knowledge";
 import { softSpring } from "@/lib/motion/spring";
+import { formatEventYearLabel } from "@/lib/utils/event-display";
 
 function EventCard({ item, index }: { item: EventItem; index: number }) {
   const [expanded, setExpanded] = useState(false);
@@ -23,7 +24,7 @@ function EventCard({ item, index }: { item: EventItem; index: number }) {
           {/* Year + badges */}
           <div className="mb-1.5 flex items-center gap-2 flex-wrap">
             <span className="font-[var(--font-heading)] text-sm font-semibold text-[#A2845E]">
-              {item.year}
+              {formatEventYearLabel(item.year, item.time_detail)}
             </span>
           </div>
           {/* Summary */}

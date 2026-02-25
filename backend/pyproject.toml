@@ -5,6 +5,7 @@ description = "Echoes LifeMemoir Backend - 知识图谱构建与回忆录生成"
 authors = ["Echoes Team"]
 license = "MIT"
 readme = "README.md"
+packages = [{ include = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.11"

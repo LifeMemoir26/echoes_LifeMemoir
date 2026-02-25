@@ -313,7 +313,7 @@ async def stream_material_events(
     material_id: str,
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> StreamingResponse:
-    """SSE stream for material processing progress (ingest→extract→vectorize→finalize)."""
+    """SSE stream for material processing progress (统一前端阶段：文件读取→知识提取→向量化存储→完成)."""
 
     trace_id = new_trace_id("material-events")
     row = _service.get_material(current_username, material_id)
@@ -326,6 +326,16 @@ async def stream_material_events(
         )
 
     async def event_stream():
+        # 如果任务已结束（例如前端晚于后台完成才订阅），立即回放终态，避免前端卡在“文件读取”。
+        status = str(row.get("status", "")).lower()
+        if not material_registry.is_active(material_id) and status in {"done", "failed"}:
+            yield encode_sse("connected", {"material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
+            if status == "done":
+                yield encode_sse("completed", {"stage": "completed", "label": "完成", "material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
+            else:
+                yield encode_sse("error", {"stage": "completed", "label": "完成", "message": "结构化失败", "material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
+            return
+
         queue = await material_registry.subscribe(material_id)
         try:
             yield encode_sse("connected", {"material_id": material_id, "at": datetime.now(timezone.utc).isoformat()})
@@ -355,7 +365,9 @@ async def stream_material_events(
         event_stream(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            # Prevent proxies from compressing SSE, which can buffer events
+            # and cause frontend progress/state to lag or stall.
+            "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",
         },
     )
