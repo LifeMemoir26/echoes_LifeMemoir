@@ -9,33 +9,33 @@ from typing import Literal
 
 
 class LLMConfig(BaseSettings):
-    """LLM 配置 - 使用七牛云 AI API"""
-    # 七牛云 API 配置
+    """LLM 配置 - OpenAI 兼容 API"""
+    # API 配置
     api_keys_str: str = Field(
         ...,  # 必需字段
-        description="七牛云 API Keys (逗号分隔，支持多个密钥实现并发)",
+        description="API Keys (逗号分隔，支持多个密钥实现并发)",
         validation_alias=AliasChoices("api_keys_str", "api_keys", "LLM_API_KEYS")
     )
     base_url: str = Field(
-        default="https://api.qnaigc.com/v1",
-        description="七牛云 API Base URL"
+        default="https://xh.v1api.cc/v1",
+        description="OpenAI 兼容 API Base URL"
     )
-    
-    # 模型选择 (基于七牛云可用模型)
+
+    # 模型选择
     extraction_model: str = Field(
-        default="deepseek/deepseek-v3.2-251201",
+        default="deepseek-v3.2",
         description="知识库结构化提取 + 精炼（事件/人物/去重/年份推理）"
     )
     conversation_model: str = Field(
-        default="deepseek/deepseek-v3.2-251201",
+        default="deepseek-v3.2",
         description="采访实时分析（摘要/补充/情感/待探索事件）"
     )
     creative_model: str = Field(
-        default="claude-3.7-sonnet",
+        default="deepseek-v3.2",
         description="文学写作（回忆录、时间轴叙述）— 产品核心输出"
     )
     utility_model: str = Field(
-        default="deepseek/deepseek-v3.2-251201",
+        default="deepseek-v3.2",
         description="轻量机械任务（JSON修复、事件合并、别名去重）"
     )
 

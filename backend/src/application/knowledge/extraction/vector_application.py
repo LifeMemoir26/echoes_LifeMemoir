@@ -36,7 +36,7 @@ class VectorApplication:
         llm_gateway: LLMGatewayProtocol,
         vector_store: VectorStore,
         data_root: str = "./.data",
-        model: str = "claude-3.7-sonnet"
+        model: str = "deepseek/deepseek-v3.2-251201"
     ):
         """
         初始化Pipeline
@@ -366,7 +366,7 @@ async def test_vector_pipeline():
     service = VectorApplication(
         username="test_user",
         concurrency_manager=concurrency_manager,
-        model="claude-3.7-sonnet"
+        model="deepseek/deepseek-v3.2-251201"
     )
     
     # 测试文本
