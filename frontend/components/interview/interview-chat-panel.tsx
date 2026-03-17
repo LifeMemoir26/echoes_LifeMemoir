@@ -116,7 +116,7 @@ export function InterviewChatPanel({
         </div>
       )}
 
-      {state === "creating_session" && (
+      {state === "creating_session" && !isConnected && (
         <div className="flex flex-1 items-center justify-center text-sm text-slate-500">正在创建会话…</div>
       )}
 

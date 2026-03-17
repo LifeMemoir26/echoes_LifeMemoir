@@ -27,6 +27,11 @@ export type InterviewMessagesCache = {
   savedAt: number;
 };
 
+export type InterviewSessionPointerCache = {
+  sessionId: string;
+  savedAt: number;
+};
+
 // ── TTL ───────────────────────────────────────────────────────────────────────
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -95,6 +100,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [interviewMessagesCache, setInterviewMessagesCache] = useState<InterviewMessagesCache | null>(null);
 
   const restoreCaches = useCallback((nextUsername: string) => {
+    setActiveSessionId(null);
     setTimelineCache(null);
     setInterviewMessagesCache(null);
 
@@ -121,12 +127,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore malformed cache
     }
+
+    try {
+      const raw = sessionStorage.getItem(ssKey("iv_session", nextUsername));
+      if (raw) {
+        const parsed: InterviewSessionPointerCache = JSON.parse(raw);
+        if (isFresh(parsed.savedAt) && parsed.sessionId) {
+          setActiveSessionId(parsed.sessionId);
+        }
+      }
+    } catch {
+      // ignore malformed cache
+    }
   }, []);
 
   const clearPersistedCaches = useCallback((targetUsername: string | null) => {
     if (!targetUsername) return;
     sessionStorage.removeItem(ssKey("tl_cache", targetUsername));
     sessionStorage.removeItem(ssKey("iv_cache", targetUsername));
+    sessionStorage.removeItem(ssKey("iv_session", targetUsername));
   }, []);
 
   const markAuthenticated = useCallback((nextUsername: string) => {
@@ -186,6 +205,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       sessionStorage.removeItem(key);
     }
   }, [interviewMessagesCache, username]);
+
+  // ── Persist active interview session pointer for refresh recovery ────────
+  useEffect(() => {
+    if (!username) return;
+    const key = ssKey("iv_session", username);
+    if (activeSessionId) {
+      const payload: InterviewSessionPointerCache = {
+        sessionId: activeSessionId,
+        savedAt: Date.now(),
+      };
+      try {
+        sessionStorage.setItem(key, JSON.stringify(payload));
+      } catch {
+        // ignore quota
+      }
+    } else {
+      sessionStorage.removeItem(key);
+    }
+  }, [activeSessionId, username]);
 
   const logout = () => {
     const currentOrSavedUsername = username || getSavedUsername();

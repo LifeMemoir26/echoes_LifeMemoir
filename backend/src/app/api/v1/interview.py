@@ -101,6 +101,25 @@ async def create_session(
     )
 
 
+@router.get("/session/active", response_model=ApiResponse[SessionCreateData])
+async def get_active_session(
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[SessionCreateData]:
+    record = await registry.get_active_by_username(current_username)
+    if record is None:
+        return ApiResponse(status="success", data=None)
+
+    return ApiResponse(
+        status="success",
+        data=SessionCreateData(
+            session_id=record.session_id,
+            thread_id=record.thread_id,
+            username=record.username,
+            created_at=record.created_at,
+        ),
+    )
+
+
 @router.post("/session/{session_id}/message", response_model=ApiResponse[SessionActionData])
 async def send_message(
     session_id: str,

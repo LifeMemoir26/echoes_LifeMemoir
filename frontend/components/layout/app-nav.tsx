@@ -75,13 +75,11 @@ export function AppNav() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Close dropdowns on route change (render-time, avoids setState-in-effect)
-  const [prevPathname, setPrevPathname] = useState(pathname);
-  if (pathname !== prevPathname) {
-    setPrevPathname(pathname);
+  // Close dropdowns on route change without triggering render-time state updates.
+  useEffect(() => {
     setKnowledgeDropdownOpen(false);
     setTimeDropdownOpen(false);
-  }
+  }, [pathname]);
 
   const tabClass = "relative py-1 transition-colors duration-150";
 

@@ -11,10 +11,12 @@ import { InterviewChatPanel } from "./interview-chat-panel";
 import { useInterviewMessages } from "./use-interview-messages";
 
 export function InterviewPage() {
+  const { username, activeSessionId, setActiveSessionId, interviewMessagesCache, setInterviewMessagesCache } = useWorkspaceContext();
   const { session, state, error, canSubmitCommand, create, forceCreate, send, flush, close, syncFromServerEvent, recoverableSessionId, recoverFromConflict } =
-    useInterviewSession();
-
-  const { username, activeSessionId, interviewMessagesCache, setInterviewMessagesCache } = useWorkspaceContext();
+    useInterviewSession({
+      initialSessionId: activeSessionId,
+      initialUsername: username,
+    });
   const { contextEvent, statusEvent, completedEvent, connectionState } = useInterviewEvents(session?.session_id ?? null);
 
   const { mergedMessages, messagesEndRef, appendSegment } = useInterviewMessages({
@@ -48,6 +50,16 @@ export function InterviewPage() {
   useEffect(() => {
     if (completedEvent) syncFromServerEvent(completedEvent.status, completedEvent.session_id);
   }, [completedEvent, syncFromServerEvent]);
+
+  useEffect(() => {
+    if (state === "closed" || state === "idle_timeout" || state === "session_not_found") {
+      setActiveSessionId(null);
+      return;
+    }
+    if (session?.session_id) {
+      setActiveSessionId(session.session_id);
+    }
+  }, [session?.session_id, setActiveSessionId, state]);
 
   const handleCreate = useCallback(async () => {
     if (!username) return;

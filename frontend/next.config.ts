@@ -32,7 +32,11 @@ function toOrigin(value: string): string | null {
   }
 }
 
-const connectSources = new Set<string>(["'self'"]);
+const connectSources = new Set<string>([
+  "'self'",
+  "https://rtasr.xfyun.cn",
+  "wss://rtasr.xfyun.cn",
+]);
 for (const candidate of [
   backendUrl,
   publicApiBaseUrl,
@@ -80,7 +84,7 @@ const nextConfig: NextConfig = {
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
-          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" }
+          { key: "Permissions-Policy", value: "camera=(), microphone=(self), geolocation=()" }
         ]
       }
     ];

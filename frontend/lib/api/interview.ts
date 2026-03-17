@@ -1,4 +1,4 @@
-import { ApiRequestError, apiDelete, apiPatch, apiPost, getApiBaseUrl, parseEnvelope } from "@/lib/api/client";
+import { ApiRequestError, apiDelete, apiGet, apiPatch, apiPost, apiPostWithSignal, getApiBaseUrl, parseEnvelope } from "@/lib/api/client";
 import type {
   InterviewSseEnvelope,
   InterviewSseEventType,
@@ -9,8 +9,15 @@ import type {
   SessionMessageRequest
 } from "@/lib/api/types";
 
-export async function createInterviewSession(payload: SessionCreateRequest): Promise<SessionCreateData> {
-  return apiPost<SessionCreateData, SessionCreateRequest>("/session/create", payload);
+export async function createInterviewSession(
+  payload: SessionCreateRequest,
+  signal?: AbortSignal,
+): Promise<SessionCreateData> {
+  return apiPostWithSignal<SessionCreateData, SessionCreateRequest>("/session/create", payload, signal);
+}
+
+export async function getActiveInterviewSession(): Promise<SessionCreateData | null> {
+  return apiGet<SessionCreateData | null>("/session/active");
 }
 
 export async function sendInterviewMessage(

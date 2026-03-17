@@ -6,6 +6,7 @@ import { useInterviewSession } from "@/lib/hooks/use-interview-session";
 
 vi.mock("@/lib/api/interview", () => ({
   createInterviewSession: vi.fn(),
+  getActiveInterviewSession: vi.fn(),
   sendInterviewMessage: vi.fn(),
   flushInterviewSession: vi.fn(),
   closeInterviewSession: vi.fn()
@@ -13,15 +14,18 @@ vi.mock("@/lib/api/interview", () => ({
 
 import {
   createInterviewSession,
+  getActiveInterviewSession,
   sendInterviewMessage
 } from "@/lib/api/interview";
 
 const mockedCreateInterviewSession = vi.mocked(createInterviewSession);
+const mockedGetActiveInterviewSession = vi.mocked(getActiveInterviewSession);
 const mockedSendInterviewMessage = vi.mocked(sendInterviewMessage);
 
 describe("useInterviewSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("sets session_conflict with recoverableSessionId on create conflict", async () => {
@@ -97,5 +101,39 @@ describe("useInterviewSession", () => {
       result.current.syncFromServerEvent("message_processed", "sess-1");
     });
     expect(result.current.state).toBe("ready_for_next_turn");
+  });
+
+  it("recovers from active session while create request is still pending", async () => {
+    vi.useFakeTimers();
+
+    mockedCreateInterviewSession.mockImplementationOnce(
+      () =>
+        new Promise(() => {
+          // keep pending to simulate a browser/proxy that never resolves POST in time
+        }),
+    );
+    mockedGetActiveInterviewSession
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        session_id: "sess-recovered",
+        thread_id: "thread-recovered",
+        username: "alice",
+        created_at: "2026-01-01T00:00:00Z",
+      });
+
+    const { result } = renderHook(() =>
+      useInterviewSession({
+        initialUsername: "alice",
+      }),
+    );
+
+    await act(async () => {
+      const pending = result.current.create("alice");
+      await vi.advanceTimersByTimeAsync(300);
+      await pending;
+    });
+
+    expect(result.current.session?.session_id).toBe("sess-recovered");
+    expect(result.current.state).toBe("connected");
   });
 });

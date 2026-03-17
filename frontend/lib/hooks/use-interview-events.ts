@@ -207,27 +207,26 @@ export function useInterviewEvents(sessionId: string | null) {
     setConnectionState("closed");
   }, [cleanup]);
 
-  // Reset all stream state when sessionId changes (render-time to satisfy react-hooks/set-state-in-effect)
-  const [prevSessionId, setPrevSessionId] = useState<string | null>(null);
-  if (sessionId !== prevSessionId) {
-    setPrevSessionId(sessionId);
+  // Reset all stream state when sessionId changes. Do this in an effect so
+  // switching interview sessions cannot trigger render-time state loops.
+  useEffect(() => {
     setEvents([]);
     setStatusEvent(null);
     setContextEvent(null);
     setCompletedEvent(null);
     setError(null);
     setLastEventId(null);
+    lastEventIdRef.current = null;
     if (!sessionId) {
       setConnectionState("idle");
     }
-  }
+  }, [sessionId]);
 
   // Side-effects for sessionId change: cleanup old connection & start new one
   useEffect(() => {
     cleanup();
     shouldStopRef.current = false;
     reconnectAttemptRef.current = 0;
-    lastEventIdRef.current = null;
 
     if (!sessionId) {
       return;
