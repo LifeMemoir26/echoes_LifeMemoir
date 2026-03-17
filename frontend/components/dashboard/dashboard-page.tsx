@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { motion } from "framer-motion";
-import { BookOpen, CalendarDays, Library, MessageSquare, Upload } from "lucide-react";
+import { BookOpen, CalendarDays, Fingerprint, Library, MessageSquare, Upload } from "lucide-react";
 import { UploadMaterialModal } from "@/components/knowledge/upload-material-modal";
+import { VoiceprintCollector } from "@/components/interview/voiceprint-collector";
 import { useWorkspaceContext } from "@/lib/workspace/context";
+import { hasVoiceprint } from "@/lib/voiceprint-db";
 import { MagneticHover } from "@/components/ui/magnetic-hover";
 import { softSpring, smooth } from "@/lib/motion/spring";
 
@@ -40,6 +42,18 @@ const FEATURE_CARDS = [
 export function DashboardPage() {
   const { username } = useWorkspaceContext();
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [voiceprintModalOpen, setVoiceprintModalOpen] = useState(false);
+  const [voiceprintExists, setVoiceprintExists] = useState<boolean | null>(null);
+
+  // Check IndexedDB for existing voiceprint on mount / username change
+  useEffect(() => {
+    if (!username) return;
+    let cancelled = false;
+    hasVoiceprint(username).then((exists) => {
+      if (!cancelled) setVoiceprintExists(exists);
+    });
+    return () => { cancelled = true; };
+  }, [username]);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -56,6 +70,29 @@ export function DashboardPage() {
           </h1>
           <p className="mt-1 text-sm text-slate-500">选择一个功能开始你的回忆之旅</p>
         </motion.div>
+
+        {/* Voiceprint status bar */}
+        {username && voiceprintExists !== null && (
+          <motion.div
+            className="mb-6 flex items-center gap-3 rounded-xl border border-[#C4A882]/30 bg-[#F5EDE4]/60 px-4 py-2.5 backdrop-blur-sm"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ ...softSpring, delay: 0.04 }}
+          >
+            <Fingerprint className={`h-4 w-4 ${voiceprintExists ? "text-emerald-500" : "text-slate-400"}`} />
+            <span className={`text-sm ${voiceprintExists ? "text-emerald-600" : "text-slate-500"}`}>
+              {voiceprintExists ? "声纹已采集" : "声纹未采集"}
+            </span>
+            <button
+              onClick={() => setVoiceprintModalOpen(true)}
+              className="ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#C4A882]/40 bg-white/80 px-3 py-1.5 text-xs text-[#A2845E] transition hover:border-[#A2845E]"
+            >
+              <Fingerprint className="h-3 w-3" />
+              {voiceprintExists ? "重新采集" : "采集声纹"}
+            </button>
+          </motion.div>
+        )}
+
         <div className="grid gap-6 md:grid-cols-2">
           {FEATURE_CARDS.map(({ href, icon: Icon, title, description }, index) => {
             const isKnowledge = href === "/knowledge";
@@ -105,6 +142,18 @@ export function DashboardPage() {
           open={uploadModalOpen}
           onClose={() => setUploadModalOpen(false)}
           username={username}
+        />
+      )}
+
+      {username && (
+        <VoiceprintCollector
+          open={voiceprintModalOpen}
+          username={username}
+          onDone={() => {
+            setVoiceprintModalOpen(false);
+            setVoiceprintExists(true);
+          }}
+          onClose={() => setVoiceprintModalOpen(false)}
         />
       )}
     </div>

@@ -1,19 +1,50 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, Square, Fingerprint, Check } from "lucide-react";
+import { Mic, Square, Fingerprint } from "lucide-react";
 import { useAudioCapture } from "@/lib/hooks/use-audio-capture";
 import { useIflytekAsr } from "@/lib/hooks/use-iflytek-asr";
+import { loadVoiceprint, hasVoiceprint as checkVoiceprint } from "@/lib/voiceprint-db";
 
 /**
  * Debounce window (ms): consecutive segments from the same speaker
  * are merged into one before dispatching.
  */
-const MERGE_DELAY = 2000;
+const MERGE_DELAY = 3000;
 
-const CALIBRATION_POEM = "白日依山尽，黄河入海流。\n欲穷千里目，更上一层楼。";
+/**
+ * Inter-chunk pacing (ms) when replaying voiceprint audio to iFlytek.
+ *
+ * iFlytek official SDK uses 40 ms (real-time rate, 1280 B per 40 ms).
+ * Docs warn "发送过快可能导致引擎出错", so keep the priming replay at
+ * the same pacing as live audio chunks.
+ */
+const CHUNK_PACE_MS = 40;
 
-type Phase = "idle" | "countdown" | "calibrating" | "recording";
+/**
+ * After sending all voiceprint chunks, we poll prevSegmentCountRef.
+ * Once no new segments arrive for SETTLE_MS, we consider priming done.
+ */
+const SETTLE_MS = 1500;
+/** Minimum total wait before we can finish priming (ms). */
+const MIN_PRIME_WAIT = 2000;
+/** Safety cap so we never hang forever (ms). */
+const MAX_PRIME_WAIT = 10_000;
+
+/**
+ * The voiceprint poem text (stripped of punctuation) used as a
+ * content-based safety filter. Even if a late voiceprint segment
+ * slips past the index boundary, we catch it by text matching.
+ */
+const VOICEPRINT_POEM_CLEAN = "白日依山尽黄河入海流";
+
+function isVoiceprintText(text: string): boolean {
+  const clean = text.replace(/[，。、！？,.\s]/g, "");
+  if (clean.length < 2) return false;
+  return VOICEPRINT_POEM_CLEAN.includes(clean) || clean.includes(VOICEPRINT_POEM_CLEAN);
+}
+
+type Phase = "idle" | "priming" | "recording";
 
 type Props = {
   username: string;
@@ -28,15 +59,20 @@ export function VoiceRecordPanel({
   disabled,
 }: Props) {
   const [phase, setPhase] = useState<Phase>("idle");
-  const [countdown, setCountdown] = useState(3);
   const [elapsed, setElapsed] = useState(0);
+  const [hasVp, setHasVp] = useState<boolean | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevSegmentCountRef = useRef(0);
 
-  // Voiceprint: the rl number that belongs to the interviewee (user)
-  const userRlRef = useRef<number | null>(null);
-  const calibrationRlsRef = useRef<number[]>([]);
+  /**
+   * The segment index at which live recording begins.
+   * Segments before this index are voiceprint priming data
+   * and should NOT appear in the live transcription area.
+   */
+  const recordingStartIdxRef = useRef(0);
+
+  /** Interviewee's rl number — always 1 after voiceprint priming. */
+  const userRlRef = useRef<number>(1);
 
   // Merge buffer
   const mergeBufferRef = useRef<{ speaker: string; texts: string[] } | null>(null);
@@ -59,8 +95,17 @@ export function VoiceRecordPanel({
   const onSegmentRef = useRef(onSegment);
   onSegmentRef.current = onSegment;
 
+  // Check IndexedDB for saved voiceprint on mount / username change
+  useEffect(() => {
+    if (!username) return;
+    let cancelled = false;
+    checkVoiceprint(username).then((exists) => {
+      if (!cancelled) setHasVp(exists);
+    });
+    return () => { cancelled = true; };
+  }, [username]);
+
   const resolveRole = useCallback((rl: number): "interviewer" | "interviewee" => {
-    if (userRlRef.current === null) return "interviewee"; // not calibrated yet
     return rl === userRlRef.current ? "interviewee" : "interviewer";
   }, []);
 
@@ -79,19 +124,20 @@ export function VoiceRecordPanel({
     mergeBufferRef.current = null;
   }, []);
 
-  // Process new segments: during calibrating → collect rl; during recording → merge & dispatch
+  // Process new segments: skip anything before the recording boundary,
+  // then merge & dispatch during recording phase.
   useEffect(() => {
     for (let i = prevSegmentCountRef.current; i < segments.length; i++) {
       const seg = segments[i];
       if (!seg.isFinal || !seg.text.trim()) continue;
 
-      if (phase === "calibrating") {
-        // Only collect genuine non-zero rawRl (actual speaker-switch markers from iFlytek)
-        if (seg.rawRl > 0) {
-          calibrationRlsRef.current.push(seg.rawRl);
-        }
-        continue;
-      }
+      // Hard boundary: always skip voiceprint priming segments,
+      // even if a late one arrives after phase switched to "recording".
+      if (i < recordingStartIdxRef.current) continue;
+
+      // Safety net: content-based filter catches any voiceprint segment
+      // that slips past the index boundary due to processing delays.
+      if (isVoiceprintText(seg.text)) continue;
 
       if (phase === "recording") {
         const role = resolveRole(seg.roleNumber);
@@ -118,90 +164,83 @@ export function VoiceRecordPanel({
   // --- Actions ---
 
   const handleStart = useCallback(async () => {
-    // If already calibrated, skip calibration and go straight to recording
-    if (userRlRef.current !== null) {
-      reset();
-      prevSegmentCountRef.current = 0;
-      mergeBufferRef.current = null;
-      if (mergeTimerRef.current) {
-        clearTimeout(mergeTimerRef.current);
-        mergeTimerRef.current = null;
+    reset();
+    prevSegmentCountRef.current = 0;
+    // Block ALL segments until priming completes
+    recordingStartIdxRef.current = Infinity;
+    mergeBufferRef.current = null;
+    if (mergeTimerRef.current) {
+      clearTimeout(mergeTimerRef.current);
+      mergeTimerRef.current = null;
+    }
+
+    await connect();
+
+    // Load voiceprint from IndexedDB and replay it to register
+    // the interviewee as rl=1 (first detected speaker).
+    const chunks = await loadVoiceprint(username);
+
+    if (chunks && chunks.length > 0) {
+      setPhase("priming");
+
+      // Send chunks at the same 40 ms cadence recommended by iFlytek.
+      // Faster replay can hurt engine stability and diarization quality.
+      for (const chunk of chunks) {
+        sendAudio(chunk);
+        await new Promise<void>((r) => setTimeout(r, CHUNK_PACE_MS));
       }
-      await connect();
-      try {
-        await startCapture();
-      } catch {
-        disconnect();
-        return;
-      }
-      setPhase("recording");
-      setElapsed(0);
-      timerRef.current = setInterval(() => setElapsed((t) => t + 1), 1000);
+
+      // IMPORTANT: Do NOT send {end: true} here!
+      // The iFlytek end signal terminates the WebSocket session
+      // permanently — the speaker model would be lost.
+      // Instead, keep the connection open and wait for the engine
+      // to finish processing the voiceprint audio.
+
+      // Poll prevSegmentCountRef: once no new segments arrive for
+      // SETTLE_MS (and we've waited at least MIN_PRIME_WAIT), the
+      // engine has finished processing the voiceprint.
+      await new Promise<void>((resolve) => {
+        let lastCount = prevSegmentCountRef.current;
+        let stableMs = 0;
+        let totalMs = 0;
+        const POLL = 200;
+
+        const poll = setInterval(() => {
+          totalMs += POLL;
+          const now = prevSegmentCountRef.current;
+          if (now === lastCount) {
+            stableMs += POLL;
+          } else {
+            lastCount = now;
+            stableMs = 0;
+          }
+          if ((totalMs >= MIN_PRIME_WAIT && stableMs >= SETTLE_MS) || totalMs >= MAX_PRIME_WAIT) {
+            clearInterval(poll);
+            resolve();
+          }
+        }, POLL);
+      });
+    }
+
+    // Lock the recording boundary — all segments up to this point
+    // are voiceprint data and will be filtered out.
+    userRlRef.current = 1;
+    recordingStartIdxRef.current = prevSegmentCountRef.current;
+
+    // Start live microphone capture on the SAME WebSocket connection
+    // so iFlytek's speaker model from the voiceprint is preserved.
+    try {
+      await startCapture();
+    } catch {
+      disconnect();
+      setPhase("idle");
       return;
     }
 
-    // First time: start countdown → calibration → recording
-    setCountdown(3);
-    setPhase("countdown");
-
-    let remaining = 3;
-    countdownTimerRef.current = setInterval(() => {
-      remaining -= 1;
-      if (remaining <= 0) {
-        if (countdownTimerRef.current) {
-          clearInterval(countdownTimerRef.current);
-          countdownTimerRef.current = null;
-        }
-        // Start ASR + capture for calibration
-        void (async () => {
-          reset();
-          prevSegmentCountRef.current = 0;
-          calibrationRlsRef.current = [];
-          await connect();
-          try {
-            await startCapture();
-          } catch {
-            disconnect();
-            setPhase("idle");
-            return;
-          }
-          setPhase("calibrating");
-        })();
-      } else {
-        setCountdown(remaining);
-      }
-    }, 1000);
-  }, [connect, disconnect, reset, startCapture]);
-
-  const handleCalibrationDone = useCallback(() => {
-    // Determine the user's rl from collected samples
-    const rls = calibrationRlsRef.current;
-    if (rls.length > 0) {
-      // Most frequent rl during calibration = the user
-      const counts = new Map<number, number>();
-      for (const rl of rls) {
-        counts.set(rl, (counts.get(rl) ?? 0) + 1);
-      }
-      let maxRl = rls[0];
-      let maxCount = 0;
-      for (const [rl, count] of counts) {
-        if (count > maxCount) {
-          maxRl = rl;
-          maxCount = count;
-        }
-      }
-      userRlRef.current = maxRl;
-    } else {
-      // Fallback: assume rl=2 is the user (rl=1 is usually first detected = interviewer)
-      userRlRef.current = 1;
-    }
-
-    // Reset segments and transition to recording — ASR stays connected
-    prevSegmentCountRef.current = segments.length; // skip calibration segments
     setPhase("recording");
     setElapsed(0);
     timerRef.current = setInterval(() => setElapsed((t) => t + 1), 1000);
-  }, [segments.length]);
+  }, [connect, disconnect, reset, startCapture, sendAudio, username]);
 
   const handleStop = useCallback(() => {
     setPhase("idle");
@@ -214,21 +253,10 @@ export function VoiceRecordPanel({
     flushMergeBuffer();
   }, [disconnect, stopCapture, flushMergeBuffer]);
 
-  const handleCancelCalibration = useCallback(() => {
-    setPhase("idle");
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-      countdownTimerRef.current = null;
-    }
-    stopCapture();
-    disconnect();
-  }, [disconnect, stopCapture]);
-
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
       if (mergeTimerRef.current) clearTimeout(mergeTimerRef.current);
       stopCapture();
       disconnect();
@@ -243,71 +271,13 @@ export function VoiceRecordPanel({
   };
 
   const errorMsg = asrError || captureError;
-  const isCalibrated = userRlRef.current !== null;
 
-  // --- Countdown UI ---
-  if (phase === "countdown") {
+  // --- Priming UI ---
+  if (phase === "priming") {
     return (
       <div className="flex flex-col items-center gap-3 py-4">
-        <Fingerprint className="h-8 w-8 text-[#A2845E] animate-pulse" />
-        <p className="text-sm text-slate-600">
-          即将开始 <span className="font-medium text-[#A2845E]">{username}</span> 的声纹检测
-        </p>
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#A2845E]/10 text-xl font-bold text-[#A2845E]">
-          {countdown}
-        </div>
-        <button
-          type="button"
-          onClick={handleCancelCalibration}
-          className="text-xs text-slate-400 hover:text-slate-600"
-        >
-          取消
-        </button>
-      </div>
-    );
-  }
-
-  // --- Calibration UI ---
-  if (phase === "calibrating") {
-    return (
-      <div className="flex flex-col items-center gap-3 py-2">
-        <div className="flex items-center gap-2">
-          <Fingerprint className="h-5 w-5 text-[#A2845E]" />
-          <span className="text-xs font-medium text-[#A2845E] uppercase tracking-wider">声纹采集中</span>
-          <div className="h-2 w-2 animate-pulse rounded-full bg-rose-500" />
-        </div>
-        <div className="w-full rounded-lg border border-[#A2845E]/20 bg-[#F5EDE4] p-4 text-center">
-          <p className="text-sm text-slate-500 mb-2">请朗读以下内容：</p>
-          <p className="text-base leading-loose text-slate-800 whitespace-pre-line font-serif">
-            {CALIBRATION_POEM}
-          </p>
-        </div>
-        {/* Live partial text indicator */}
-        {(partialText || segments.some((s) => s.isFinal)) && (
-          <p className="text-xs text-slate-400">
-            正在识别: {partialText || "..."}
-          </p>
-        )}
-        <div className="flex gap-3">
-          <button
-            type="button"
-            onClick={handleCancelCalibration}
-            className="rounded-lg px-4 py-1.5 text-xs text-slate-500 hover:bg-slate-100 transition-colors"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={handleCalibrationDone}
-            className="flex items-center gap-1.5 rounded-lg bg-[#A2845E] px-4 py-1.5 text-xs font-medium text-white hover:bg-[#8B7050] transition-colors shadow-sm"
-          >
-            <Check className="h-3.5 w-3.5" />
-            读完了
-          </button>
-        </div>
-        {errorMsg && (
-          <p className="text-center text-xs text-rose-500">{errorMsg}</p>
-        )}
+        <Fingerprint className="h-6 w-6 text-[#A2845E] animate-pulse" />
+        <span className="text-xs text-[#A2845E]">声纹初始化中…</span>
       </div>
     );
   }
@@ -318,14 +288,9 @@ export function VoiceRecordPanel({
       {/* Live transcription area (only during recording) */}
       {phase === "recording" && (
         <div className="max-h-[140px] min-h-[60px] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs leading-relaxed text-slate-600">
-          {process.env.NODE_ENV === "development" && (
-            <div className="mb-1 text-[10px] text-slate-400 border-b border-slate-200 pb-1">
-              userRl={userRlRef.current ?? "null"} |
-              segments(post-cal): {segments.filter((s) => s.isFinal).length - (prevSegmentCountRef.current)}
-            </div>
-          )}
           {segments
-            .filter((s) => s.isFinal)
+            .slice(recordingStartIdxRef.current)
+            .filter((s) => !isVoiceprintText(s.text))
             .map((s, i) => {
               const role = resolveRole(s.roleNumber);
               const label = role === "interviewer" ? "采访者" : (username || "受访者");
@@ -375,12 +340,12 @@ export function VoiceRecordPanel({
           </div>
         )}
 
-        {/* Calibration status indicator */}
+        {/* Voiceprint status indicator */}
         {phase === "idle" && (
           <div className="flex items-center gap-1">
-            <Fingerprint className={`h-3.5 w-3.5 ${isCalibrated ? "text-emerald-500" : "text-slate-300"}`} />
-            <span className={`text-[10px] ${isCalibrated ? "text-emerald-500" : "text-slate-400"}`}>
-              {isCalibrated ? "已校准" : "首次需校准"}
+            <Fingerprint className={`h-3.5 w-3.5 ${hasVp ? "text-emerald-500" : "text-slate-300"}`} />
+            <span className={`text-[10px] ${hasVp ? "text-emerald-500" : "text-slate-400"}`}>
+              {hasVp ? "声纹就绪" : `请先在主页采集${username}声纹`}
             </span>
           </div>
         )}

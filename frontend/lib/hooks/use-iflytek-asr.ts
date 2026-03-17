@@ -17,6 +17,12 @@ export type AsrSegment = {
   isFinal: boolean;
 };
 
+export type IflytekWord = {
+  w: string;
+  wp: string;
+  rl?: string;
+};
+
 /**
  * Parsed iFlytek RTASR response data (the JSON inside `data` field).
  */
@@ -26,13 +32,63 @@ type IflytekResultData = {
       type: string; // "0" final, "1" intermediate
       rt: Array<{
         ws: Array<{
-          cw: Array<{ w: string; wp: string; rl?: string }>;
+          cw: Array<IflytekWord>;
         }>;
       }>;
     };
   };
   seg_id: string;
 };
+
+function parseRole(rawRl: string | undefined): number {
+  if (!rawRl) return 0;
+  const parsed = Number.parseInt(rawRl, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+export function splitFinalWordsByRole(
+  words: IflytekWord[],
+  previousRole: number
+): { segments: AsrSegment[]; lastRole: number } {
+  const segments: AsrSegment[] = [];
+  let currentRole = previousRole > 0 ? previousRole : 1;
+  let currentRawRl = 0;
+  let buffer = "";
+
+  const flush = () => {
+    const text = buffer.trim();
+    if (!text) {
+      buffer = "";
+      currentRawRl = 0;
+      return;
+    }
+    segments.push({
+      text,
+      roleNumber: currentRole,
+      rawRl: currentRawRl,
+      isFinal: true,
+    });
+    buffer = "";
+    currentRawRl = 0;
+  };
+
+  for (const word of words) {
+    const rl = parseRole(word.rl);
+    if (rl > 0 && rl !== currentRole) {
+      flush();
+      currentRole = rl;
+      currentRawRl = rl;
+    } else if (rl > 0 && buffer.length === 0) {
+      currentRole = rl;
+      currentRawRl = rl;
+    }
+
+    buffer += word.w;
+  }
+
+  flush();
+  return { segments, lastRole: currentRole };
+}
 
 /**
  * Hook for managing iFlytek RTASR WebSocket connection.
@@ -47,7 +103,7 @@ export function useIflytekAsr() {
   const [partialText, setPartialText] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
-  // Track the latest known non-zero role number per seg_id
+  // Track the latest explicit non-zero role number across finalized results
   const lastRoleRef = useRef<number>(0);
   // Set to false by disconnect() to cancel a concurrent connect() that is awaiting getAsrSignedUrl
   const connectActiveRef = useRef<boolean>(false);
@@ -146,20 +202,15 @@ export function useIflytekAsr() {
 
             const allCw = st.rt.flatMap((rt) => rt.ws).flatMap((ws) => ws.cw);
             const text = allCw.map((cw) => cw.w).join("");
-            const firstNonZeroRl = allCw.find((cw) => cw.rl && cw.rl !== "0");
-            const rl = firstNonZeroRl ? parseInt(firstNonZeroRl.rl!, 10) : 0;
-
-            if (rl > 0) {
-              lastRoleRef.current = rl;
-            }
-            const effectiveRole = lastRoleRef.current || 1;
             const isFinal = st.type === "0";
 
             if (isFinal) {
-              setSegments((prev) => [
-                ...prev,
-                { text, roleNumber: effectiveRole, rawRl: rl, isFinal: true },
-              ]);
+              const { segments: finalSegments, lastRole } = splitFinalWordsByRole(
+                allCw,
+                lastRoleRef.current
+              );
+              lastRoleRef.current = lastRole;
+              setSegments((prev) => [...prev, ...finalSegments]);
               setPartialText("");
             } else {
               setPartialText(text);
@@ -200,6 +251,19 @@ export function useIflytekAsr() {
     }
   }, []);
 
+  /**
+   * Send the iFlytek end-of-stream signal (`{end: true}`).
+   * This forces the server to flush all buffered segments immediately.
+   * Unlike disconnect(), this does NOT close the WebSocket or clear handlers,
+   * so late segments can still arrive and be processed.
+   */
+  const sendEnd = useCallback(() => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ end: true }));
+    }
+  }, []);
+
   const disconnect = useCallback(() => {
     connectActiveRef.current = false; // Cancel any in-flight connect() awaiting getAsrSignedUrl
     const ws = wsRef.current;
@@ -235,6 +299,7 @@ export function useIflytekAsr() {
     partialText,
     connect,
     sendAudio,
+    sendEnd,
     disconnect,
     reset,
   };

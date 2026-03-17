@@ -17,6 +17,7 @@ export function useAudioCapture(onChunk: (chunk: ArrayBuffer) => void) {
   const streamRef = useRef<MediaStream | null>(null);
   const contextRef = useRef<AudioContext | null>(null);
   const workletRef = useRef<AudioWorkletNode | null>(null);
+  const sinkRef = useRef<GainNode | null>(null);
 
   const start = useCallback(async () => {
     try {
@@ -26,8 +27,11 @@ export function useAudioCapture(onChunk: (chunk: ArrayBuffer) => void) {
         audio: {
           sampleRate: 48000,
           channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
+          // Preserve speaker characteristics for diarization; browser speech
+          // enhancement tends to collapse or distort different voices.
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
         },
       });
       streamRef.current = stream;
@@ -45,14 +49,20 @@ export function useAudioCapture(onChunk: (chunk: ArrayBuffer) => void) {
 
       const source = ctx.createMediaStreamSource(stream);
       const worklet = new AudioWorkletNode(ctx, "pcm-capture-processor");
+      const silentSink = ctx.createGain();
+      silentSink.gain.value = 0;
 
       worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
         onChunk(event.data);
       };
 
       source.connect(worklet);
-      worklet.connect(ctx.destination); // required for processing to run
+      // Keep the node in a live graph so processing runs, but avoid playing
+      // microphone monitoring to speakers, which can feed back into capture.
+      worklet.connect(silentSink);
+      silentSink.connect(ctx.destination);
       workletRef.current = worklet;
+      sinkRef.current = silentSink;
 
       setState("recording");
     } catch (err) {
@@ -67,6 +77,8 @@ export function useAudioCapture(onChunk: (chunk: ArrayBuffer) => void) {
     workletRef.current?.port.postMessage("stop");
     workletRef.current?.disconnect();
     workletRef.current = null;
+    sinkRef.current?.disconnect();
+    sinkRef.current = null;
 
     if (contextRef.current?.state !== "closed") {
       void contextRef.current?.close();
