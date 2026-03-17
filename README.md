@@ -120,10 +120,11 @@ PYTHONPATH=. ./.venv/bin/pytest -q tests
 cd ../frontend && pnpm -s check:contract
 ```
 
-# 深入了解
+## 文档索引
 
 | 文档                                                                 | 内容                                 |
 | -------------------------------------------------------------------- | ------------------------------------ |
+| [docker/README.md](docker/README.md)                                 | 生产环境部署指南                     |
 | [backend/README.md](backend/README.md)                               | 分层架构、LangGraph 工作流、API 端点 |
 | [backend/docs/llm-api-call-map.md](backend/docs/llm-api-call-map.md) | 工作流与提示词指南                   |
 | [frontend/README.md](frontend/README.md)                             | 路由架构、组件结构、设计系统         |
