@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { withBasePath } from "@/lib/runtime/base-path";
 
 export type AudioCaptureState = "idle" | "recording" | "error";
 
@@ -45,7 +46,7 @@ export function useAudioCapture(onChunk: (chunk: ArrayBuffer) => void) {
         await ctx.resume();
       }
 
-      await ctx.audioWorklet.addModule("/worklets/pcm-capture-processor.js");
+      await ctx.audioWorklet.addModule(withBasePath("/worklets/pcm-capture-processor.js"));
 
       const source = ctx.createMediaStreamSource(stream);
       const worklet = new AudioWorkletNode(ctx, "pcm-capture-processor");

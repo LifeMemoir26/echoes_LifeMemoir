@@ -7,6 +7,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { stripBasePath } from "@/lib/runtime/base-path";
 import { useWorkspaceContext } from "@/lib/workspace/context";
 import { microRebound, snappy } from "@/lib/motion/spring";
 
@@ -41,6 +42,7 @@ function isTabActive(pathname: string, href: string) {
 
 export function AppNav() {
   const pathname = usePathname();
+  const normalizedPathname = stripBasePath(pathname);
   const router = useRouter();
   const { username, logout } = useWorkspaceContext();
   const [knowledgeDropdownOpen, setKnowledgeDropdownOpen] = useState(false);
@@ -103,7 +105,7 @@ export function AppNav() {
               key={item.href}
               href={item.href as Route}
               className={`block px-4 py-2 text-sm transition-colors duration-100 ${
-                pathname === item.href
+                normalizedPathname === item.href
                   ? "text-[#A2845E] font-semibold"
                   : "text-slate-600 hover:text-[#A2845E] hover:bg-[#A2845E]/[0.06]"
               }`}
@@ -126,7 +128,7 @@ export function AppNav() {
       {/* Tabs */}
       <div className="flex items-center gap-6 text-sm font-medium">
         {NAV_TABS.map((tab) => {
-          const active = isTabActive(pathname, tab.href);
+          const active = isTabActive(normalizedPathname, tab.href);
           return (
             <Link
               key={tab.href}
@@ -153,7 +155,7 @@ export function AppNav() {
               setKnowledgeDropdownOpen((v) => !v);
               setTimeDropdownOpen(false);
             }}
-            className={`flex cursor-pointer items-center gap-1 ${tabClass} ${isKnowledgeActive(pathname) ? "text-[#A2845E]" : "text-slate-500 hover:text-slate-800"}`}
+            className={`flex cursor-pointer items-center gap-1 ${tabClass} ${isKnowledgeActive(normalizedPathname) ? "text-[#A2845E]" : "text-slate-500 hover:text-slate-800"}`}
             aria-expanded={knowledgeDropdownOpen}
             aria-haspopup="true"
           >
@@ -161,7 +163,7 @@ export function AppNav() {
             <ChevronDown
               className={`h-3.5 w-3.5 transition-transform duration-150 ${knowledgeDropdownOpen ? "rotate-180" : ""}`}
             />
-            {isKnowledgeActive(pathname) && (
+            {isKnowledgeActive(normalizedPathname) && (
               <motion.span
                 layoutId="nav-indicator"
                 className="absolute inset-x-0 -bottom-[1px] h-0.5 rounded-full bg-[#A2845E]"
@@ -184,7 +186,7 @@ export function AppNav() {
               setTimeDropdownOpen((v) => !v);
               setKnowledgeDropdownOpen(false);
             }}
-            className={`flex cursor-pointer items-center gap-1 ${tabClass} ${isTimeActive(pathname) ? "text-[#A2845E]" : "text-slate-500 hover:text-slate-800"}`}
+            className={`flex cursor-pointer items-center gap-1 ${tabClass} ${isTimeActive(normalizedPathname) ? "text-[#A2845E]" : "text-slate-500 hover:text-slate-800"}`}
             aria-expanded={timeDropdownOpen}
             aria-haspopup="true"
           >
@@ -192,7 +194,7 @@ export function AppNav() {
             <ChevronDown
               className={`h-3.5 w-3.5 transition-transform duration-150 ${timeDropdownOpen ? "rotate-180" : ""}`}
             />
-            {isTimeActive(pathname) && (
+            {isTimeActive(normalizedPathname) && (
               <motion.span
                 layoutId="nav-indicator"
                 className="absolute inset-x-0 -bottom-[1px] h-0.5 rounded-full bg-[#A2845E]"

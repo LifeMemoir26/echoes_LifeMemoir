@@ -1,7 +1,28 @@
 import type { NextConfig } from "next";
 
 const backendUrl = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
+const appBasePath = normalizeBasePath(process.env.APP_BASE_PATH ?? "");
+const publicApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? withBasePath(appBasePath, "/api/v1");
 const isProd = process.env.NODE_ENV === "production";
+
+function normalizeBasePath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "/") return "";
+
+  const withoutTrailingSlash = trimmed.replace(/\/+$/, "");
+  return withoutTrailingSlash.startsWith("/") ? withoutTrailingSlash : `/${withoutTrailingSlash}`;
+}
+
+function withBasePath(basePath: string, path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (!basePath) {
+    return normalizedPath;
+  }
+  if (normalizedPath === "/") {
+    return `${basePath}/`;
+  }
+  return `${basePath}${normalizedPath}`;
+}
 
 function toOrigin(value: string): string | null {
   try {
@@ -14,7 +35,7 @@ function toOrigin(value: string): string | null {
 const connectSources = new Set<string>(["'self'"]);
 for (const candidate of [
   backendUrl,
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1",
+  publicApiBaseUrl,
   process.env.NEXT_PUBLIC_APP_URL ?? ""
 ]) {
   const origin = toOrigin(candidate);
@@ -39,6 +60,7 @@ const contentSecurityPolicy = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
+  basePath: appBasePath || undefined,
   output: process.env.STANDALONE === "true" ? "standalone" : undefined,
   typedRoutes: true,
   async rewrites() {

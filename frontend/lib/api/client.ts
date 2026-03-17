@@ -1,6 +1,7 @@
 import type { ApiEnvelope, ApiError, InterviewStreamError, NormalizedApiError } from "@/lib/api/types";
+import { withBasePath } from "@/lib/runtime/base-path";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? withBasePath("/api/v1");
 
 export class ContractError extends Error {
   constructor(message: string) {

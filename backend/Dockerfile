@@ -1,14 +1,19 @@
-FROM python:3.12-slim AS builder
+ARG PYTHON_BASE_IMAGE=python:3.12-slim
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+FROM ${PYTHON_BASE_IMAGE} AS builder
+
+COPY --from=${UV_IMAGE} /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 WORKDIR /project/backend
 
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+COPY pyproject.toml ./
+COPY README.md ./
+COPY src ./src
+RUN uv venv && uv pip install --python .venv/bin/python .
 
-FROM python:3.12-slim AS runner
+FROM ${PYTHON_BASE_IMAGE} AS runner
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

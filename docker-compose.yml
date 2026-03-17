@@ -2,14 +2,19 @@ services:
   backend:
     build:
       context: ./backend
+      args:
+        PYTHON_BASE_IMAGE: "${PYTHON_BASE_IMAGE:-python:3.12-slim}"
+        UV_IMAGE: "${UV_IMAGE:-ghcr.io/astral-sh/uv:latest}"
     restart: unless-stopped
     env_file:
       - ./backend/.env
     environment:
       ECHOES_ENV: production
       CORS_ORIGINS: "https://${APP_DOMAIN:?APP_DOMAIN is required}"
-      TRUSTED_HOSTS: "${APP_DOMAIN:?APP_DOMAIN is required}"
+      TRUSTED_HOSTS: "${APP_DOMAIN:?APP_DOMAIN is required},127.0.0.1,localhost,backend"
       SESSION_COOKIE_SECURE: "true"
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-18000}:8000"
     volumes:
       - ./data:/project/data
     healthcheck:
@@ -23,18 +28,27 @@ services:
     build:
       context: ./frontend
       args:
+        NODE_BASE_IMAGE: "${NODE_BASE_IMAGE:-node:20-slim}"
         BACKEND_URL: http://backend:8000
+        APP_BASE_PATH: "${APP_BASE_PATH:-}"
+        NEXT_PUBLIC_BASE_PATH: "${APP_BASE_PATH:-}"
+        NEXT_PUBLIC_API_BASE_URL: "${APP_BASE_PATH:-}/api/v1"
+        NEXT_PUBLIC_APP_URL: "https://${APP_DOMAIN:?APP_DOMAIN is required}${APP_BASE_PATH:-}"
     restart: unless-stopped
+    environment:
+      APP_BASE_PATH: "${APP_BASE_PATH:-}"
     depends_on:
       backend:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-13000}:3000"
     healthcheck:
       test:
         [
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3000').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+          "const path = process.env.APP_BASE_PATH || '/'; fetch('http://127.0.0.1:3000' + (path || '/')).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
         ]
       interval: 30s
       timeout: 5s
@@ -42,11 +56,12 @@ services:
       start_period: 20s
 
   caddy:
+    profiles: ["edge"]
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
       APP_DOMAIN: "${APP_DOMAIN:?APP_DOMAIN is required}"
-      LETSENCRYPT_EMAIL: "${LETSENCRYPT_EMAIL:?LETSENCRYPT_EMAIL is required}"
+      LETSENCRYPT_EMAIL: "${LETSENCRYPT_EMAIL:-}"
     ports:
       - "80:80"
       - "443:443"
