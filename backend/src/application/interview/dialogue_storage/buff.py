@@ -103,6 +103,17 @@ class DialogueBuffer:
         """返回当前队列大小"""
         return len(self._queue)
     
+    def peek_last(self) -> Optional[DialogueTurn]:
+        """
+        获取最后一条对话（不移除）
+
+        Returns:
+            最后一条 DialogueTurn，队列为空时返回 None
+        """
+        if not self._queue:
+            return None
+        return self._queue[-1]
+
     def is_full(self) -> bool:
         """检查队列是否已满"""
         return len(self._queue) >= self.max_size

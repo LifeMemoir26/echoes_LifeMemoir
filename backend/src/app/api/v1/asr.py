@@ -34,8 +34,8 @@ async def get_asr_signed_url(
 ) -> ApiResponse[dict]:
     """生成讯飞 RTASR WebSocket 签名 URL（需认证）
 
-    返回的 URL 已启用说话人分离（roleType=2），讯飞会在返回结果中
-    附带 rl 字段标识不同说话人编号。
+    返回的 URL 已启用角色分离（roleType=2），讯飞在返回结果中
+    通过 rl 字段标识不同说话人编号。
     """
     cfg = get_settings().asr
     ts = str(int(time.time()))
@@ -43,10 +43,11 @@ async def get_asr_signed_url(
     # base64 输出可能含 +/= 等字符，需 URL 编码
     signa_encoded = quote(signa, safe="")
 
-    # roleType=2 启用说话人分离（角色分离），讯飞返回 rl 字段区分说话人
+    # vadMdn=2 使用近场模式，更符合双人围绕单设备采访的拾音场景。
+    # roleType=2 启用角色分离，讯飞返回 rl 字段区分说话人。
     url = (
         f"wss://rtasr.xfyun.cn/v1/ws"
-        f"?appid={cfg.appid}&ts={ts}&signa={signa_encoded}&roleType=2"
+        f"?appid={cfg.appid}&ts={ts}&signa={signa_encoded}&vadMdn=2&roleType=2"
     )
 
     return ApiResponse(

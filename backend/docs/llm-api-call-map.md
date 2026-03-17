@@ -114,10 +114,10 @@ flowchart TB
 
         TRIGGER --> PREPARE["从存储中读取共享数据<br/>缓冲区①全部对话 + 仓库②内容<br/>+ 摘要队列③历史 + 人物画像 + 向量检索"]
 
-        PREPARE --> GATHER["三个 AI 分析任务并行"]
+        PREPARE --> GATHER["三个 AI 分析任务并行<br/>（双源向量检索：对话内容+摘要）"]
 
-        GATHER --> T1["🤖 生成事件补充<br/><i>supplement_bootstrap</i><br/>≤8 条"]
-        GATHER --> T2["🤖 生成情感锚点<br/><i>emotion_anchors</i><br/>正向 3-5 + 敏感 2-4"]
+        GATHER --> T1["🤖 生成事件补充<br/><i>supplement_refresh</i><br/>≤8 条"]
+        GATHER --> T2["🤖 生成情感锚点<br/><i>emotion_anchors_refresh</i><br/>正向 3-5 + 敏感 2-4"]
         GATHER --> T3["探索待深入事件④中的条目"]
 
         T3 --> T3A["🤖 提取事件详情<br/><i>pending_extract</i>"]
@@ -168,12 +168,23 @@ flowchart TB
 
 每收到第 N 条消息（默认 N=5），**三个 AI 任务并行**做深度分析：
 
-| 做什么                                    | 日志标签               | 温度 | 提示词在哪                                                                                                          |
-| ----------------------------------------- | ---------------------- | ---- | ------------------------------------------------------------------------------------------------------------------- |
-| 生成/更新事件补充信息（≤8 条）            | `supplement_bootstrap` | 0.3  | [`supplement_extractor.py` 第 58-90 行](../src/application/interview/actuator/supplement_extractor.py#L58)          |
-| 生成情感锚点（正向 3-5 条 + 敏感 2-4 条） | `emotion_anchors`      | 0.5  | [`supplement_extractor.py` 第 129-162 行](../src/application/interview/actuator/supplement_extractor.py#L129)       |
+| 做什么                                    | 日志标签                  | 温度 | 提示词在哪                                                                                                          |
+| ----------------------------------------- | ------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------- |
+| 生成/更新事件补充信息（≤8 条）            | `supplement_refresh`      | 0.3  | [`supplement_extractor.py` 第 58-90 行](../src/application/interview/actuator/supplement_extractor.py#L58)          |
+| 生成情感锚点（正向 3-5 条 + 敏感 2-4 条） | `emotion_anchors_refresh` | 0.5  | [`supplement_extractor.py` 第 129-162 行](../src/application/interview/actuator/supplement_extractor.py#L129)       |
 | 提取待深入事件的详情                      | `pending_extract`      | 0.2  | [`pending_event_processor.py` 第 87-123 行](../src/application/interview/actuator/pending_event_processor.py#L87)   |
 | 合并同一事件的新旧分析内容                | `pending_merge`        | 0.1  | [`pending_event_processor.py` 第 341-378 行](../src/application/interview/actuator/pending_event_processor.py#L341) |
+
+> **双源向量检索机制**：N 轮刷新在调用 AI 前，会先从知识库向量存储中检索相关背景记录，作为"相关背景记录"段落注入 AI 提示词。检索使用两个独立的查询源，结果合并去重后传入 AI：
+>
+> | 查询源 | 查询内容 | 参数 | 说明 |
+> | ------ | -------- | ---- | ---- |
+> | **源1：对话内容** | 最近 5 行对话（逐行独立查询） | `top_k=3, threshold=0.30` | 始终可用，不依赖 build_context 完成。每行独立做 embedding + BM25，避免拼接导致语义稀释。Interviewer 的提问中常包含知识库实体名（如地名、人名），BM25 关键词分量能直接命中 |
+> | **源2：摘要** | SummaryQueue 中的历史摘要 | `top_k=2, threshold=0.50` | build_context 产出后可用。经 AI 提炼的摘要文本更聚焦，embedding 匹配精度更高 |
+>
+> 检索流程：对话行 / 摘要 → Gemini Embedding（768 维，RETRIEVAL_QUERY） → sqlite-vec 向量检索（70%）+ FTS5 BM25 关键词匹配（30%）→ 加权融合 → 阈值过滤 → 回查原始 chunk 文本 → 去重 → 注入 AI 提示词。
+>
+> 代码位置：[`session_app_service.py` 第 317-358 行](../src/application/interview/session_app_service.py#L317)
 
 ### 采访存储机制
 
@@ -529,7 +540,7 @@ flowchart LR
 
 ## 七、全部 AI 调用一览
 
-共 20 个调用点（含 JSON 修复），按模块分配 4 种模型角色：
+共 22 个调用点（含 JSON 修复），按模块分配 4 种模型角色：
 
 **模型配置**（在 `.env` 中设置，详见 `.env.example`）：
 
@@ -545,8 +556,10 @@ flowchart LR
 | 日志标签               | 功能                          | 温度 | 模型角色     | 所属工作流 | 提示词文件                                                                                                               |
 | ---------------------- | ----------------------------- | ---- | ------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `dialogue_summary`     | 对话摘要提取                  | 0.3  | conversation | 采访       | [`summary_processor.py`](../src/application/interview/actuator/summary_processor.py#L81)                                 |
-| `supplement_bootstrap` | 事件补充信息生成              | 0.3  | conversation | 采访       | [`supplement_extractor.py`](../src/application/interview/actuator/supplement_extractor.py#L58)                           |
-| `emotion_anchors`      | 情感锚点生成                  | 0.5  | conversation | 采访       | [`supplement_extractor.py`](../src/application/interview/actuator/supplement_extractor.py#L129)                          |
+| `supplement_bootstrap` | 事件补充信息生成（初始预热） | 0.3  | conversation | 采访       | [`supplement_extractor.py`](../src/application/interview/actuator/supplement_extractor.py#L58)                           |
+| `supplement_refresh`   | 事件补充信息刷新（N轮刷新）  | 0.3  | conversation | 采访       | [`supplement_extractor.py`](../src/application/interview/actuator/supplement_extractor.py#L58)                           |
+| `emotion_anchors`      | 情感锚点生成（初始预热）     | 0.5  | conversation | 采访       | [`supplement_extractor.py`](../src/application/interview/actuator/supplement_extractor.py#L129)                          |
+| `emotion_anchors_refresh` | 情感锚点刷新（N轮刷新）  | 0.5  | conversation | 采访       | [`supplement_extractor.py`](../src/application/interview/actuator/supplement_extractor.py#L129)                          |
 | `pending_init_db`      | 从数据库事件找追问点          | 0.3  | conversation | 采访       | [`pending_event_initializer.py`](../src/application/interview/actuator/pending_event_initializer.py#L195)                |
 | `pending_init_chunks`  | 从文本中找新线索              | 0.4  | conversation | 采访       | [`pending_event_initializer.py`](../src/application/interview/actuator/pending_event_initializer.py#L349)                |
 | `pending_extract`      | 探索事件详情                  | 0.2  | conversation | 采访       | [`pending_event_processor.py`](../src/application/interview/actuator/pending_event_processor.py#L87)                     |

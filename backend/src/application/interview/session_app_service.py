@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -313,16 +314,53 @@ class InterviewSessionAppService:
             summaries = await storage.get_all_summaries()
             char_profile = runtime.sqlite_client.get_character_profile_text()
             formatted_summaries = [f"（重要性：{imp}）{s}" for imp, s in summaries]
+
+            # 双源向量检索：对话内容（近期信息）+ 摘要（精炼查询）
             vector_results: list[dict] = []
-            if formatted_summaries:
-                try:
-                    vector_results = runtime.vector_store.query_relevant_chunks(
-                        summaries=formatted_summaries,
-                        top_k_per_summary=2,
-                        similarity_threshold=0.5,
+            try:
+                # 源1：最近对话逐行独立查询（每行各自 embedding + BM25，互不稀释）
+                recent_lines = [
+                    line for line in raw_text.split("\n") if line.strip()
+                ]
+                dialogue_queries = recent_lines[-5:] if recent_lines else []
+                if not dialogue_queries and raw_text:
+                    dialogue_queries = [raw_text[-800:]]
+                # 剥离角色前缀 [Interviewer]: / [受访者N]: 以提升 embedding 质量
+                dialogue_queries = [
+                    re.sub(r"\[.*?\]\s*[:：]\s*", "", q).strip()
+                    for q in dialogue_queries
+                ]
+                dialogue_queries = [q for q in dialogue_queries if q]
+                if dialogue_queries:
+                    vector_results.extend(
+                        runtime.vector_store.query_relevant_chunks(
+                            summaries=dialogue_queries,
+                            top_k_per_summary=3,
+                            similarity_threshold=0.30,
+                        )
                     )
-                except Exception:
-                    vector_results = []
+
+                # 源2：摘要作为查询（build_context 产出后可用，更精炼）
+                if formatted_summaries:
+                    vector_results.extend(
+                        runtime.vector_store.query_relevant_chunks(
+                            summaries=formatted_summaries,
+                            top_k_per_summary=2,
+                            similarity_threshold=0.50,
+                        )
+                    )
+
+                # 按 matched_chunk 去重
+                seen: set[str] = set()
+                unique: list[dict] = []
+                for r in vector_results:
+                    key = r.get("matched_chunk", "")
+                    if key and key not in seen:
+                        seen.add(key)
+                        unique.append(r)
+                vector_results = unique
+            except Exception:
+                vector_results = []
 
             async def _enrich() -> None:
                 from src.application.interview.dialogue_storage import UPDATE_EXPLORED
@@ -339,12 +377,12 @@ class InterviewSessionAppService:
                 await self.registry.publish(session_id, "context", {"trace_id": trace_id, "partial": "pending_events", "pending_events": await session.get_pending_events_summary(), "at": datetime.now(timezone.utc).isoformat()})
 
             async def _supplements() -> None:
-                result = await runtime.supplement_extractor.generate_supplements(raw_material=raw_text, summaries=summaries, vector_results=vector_results, char_profile=char_profile)
+                result = await runtime.supplement_extractor.generate_supplements_refresh(raw_material=raw_text, summaries=summaries, vector_results=vector_results, char_profile=char_profile)
                 storage.update_event_supplements(result.supplements)
                 await self.registry.publish(session_id, "context", {"trace_id": trace_id, "partial": "supplements", "event_supplements": [s.model_dump() for s in result.supplements], "at": datetime.now(timezone.utc).isoformat()})
 
             async def _anchors() -> None:
-                result = await runtime.supplement_extractor.generate_anchors(raw_material=raw_text, summaries=summaries, vector_results=vector_results, char_profile=char_profile)
+                result = await runtime.supplement_extractor.generate_anchors_refresh(raw_material=raw_text, summaries=summaries, vector_results=vector_results, char_profile=char_profile)
                 storage.update_interview_suggestions(result.positive_triggers, result.sensitive_topics)
                 await self.registry.publish(session_id, "context", {"trace_id": trace_id, "partial": "anchors", "positive_triggers": result.positive_triggers, "sensitive_topics": result.sensitive_topics, "at": datetime.now(timezone.utc).isoformat()})
 

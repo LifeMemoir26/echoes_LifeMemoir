@@ -4,6 +4,7 @@ Chunk存储管理器 - 管理chunks和摘要的索引关系
 """
 
 import logging
+import re
 import sqlite3
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -12,6 +13,24 @@ from datetime import datetime
 from ....domain.schemas.chunk import ChunkRow, SummaryRow, HybridSearchResult, ChunkStoreStats
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_fts5_query(text: str) -> str:
+    """将原始文本转为安全的 FTS5 查询字符串。
+
+    FTS5 MATCH 语法中 [ ] " * ^ { } ( ) 等为保留字符，
+    直接传入含 [Interviewer] 之类的对话行会导致 syntax error。
+    策略：把每个 token 用双引号包裹，使 FTS5 按字面量匹配。
+    """
+    # 去掉角色前缀 [Interviewer]: / [受访者N]:
+    text = re.sub(r"\[.*?\]\s*[:：]\s*", "", text)
+    # 把双引号替换掉（FTS5 双引号内不能嵌套双引号）
+    text = text.replace('"', " ")
+    # 按空白分词，每个 token 用双引号包裹
+    tokens = text.split()
+    if not tokens:
+        return '""'
+    return " ".join(f'"{t}"' for t in tokens)
 
 
 class ChunkStore:
@@ -257,6 +276,7 @@ class ChunkStore:
         try:
             cursor = self.conn.cursor()
             fts_top = top_k * 4
+            safe_query = _sanitize_fts5_query(query_text)
             # FTS5 rank 是负数（越小越相关），归一化到 [0, 1]
             cursor.execute(
                 f"""
@@ -266,7 +286,7 @@ class ChunkStore:
                 ORDER BY rank
                 LIMIT {fts_top}
                 """,
-                (query_text,),
+                (safe_query,),
             )
             fts_rows = cursor.fetchall()
             if fts_rows:

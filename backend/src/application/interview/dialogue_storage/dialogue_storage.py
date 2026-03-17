@@ -102,6 +102,9 @@ class DialogueStorage:
     # 核心方法：添加对话
     # =========================================================================
     
+    # 同说话人合并窗口（秒）：连续消息间隔低于此值时合并为同一轮
+    MERGE_WINDOW: float = 8.0
+
     def add_dialogue(
         self,
         speaker: str,
@@ -112,10 +115,27 @@ class DialogueStorage:
         向存储系统中添加一轮对话
 
         处理流程：
-        1. 添加到对话缓冲区
-        2. 如果缓冲区满，移除的对话进入临时存储
-        （摘要提取统一由 trigger_summary_update_if_ready 的 mark-and-drain 异步驱动）
+        1. 若最后一轮对话来自同一说话人且时间差 < MERGE_WINDOW，合并内容
+        2. 否则新建对话轮次添加到缓冲区
+        3. 如果缓冲区满，移除的对话进入临时存储
         """
+        last = self.buffer.peek_last()
+        if (
+            last is not None
+            and last.speaker == speaker
+            and timestamp is not None
+            and last.timestamp is not None
+            and (timestamp - last.timestamp) < self.MERGE_WINDOW
+        ):
+            gap = timestamp - last.timestamp
+            last.content += content
+            last.timestamp = timestamp
+            logger.debug(
+                "Merged dialogue into previous turn from %s (gap %.1fs)",
+                speaker, gap,
+            )
+            return
+
         turn = DialogueTurn(speaker=speaker, content=content, timestamp=timestamp)
         self.dialogue_count += 1
 
