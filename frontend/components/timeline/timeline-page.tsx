@@ -8,6 +8,7 @@ import { motion } from "framer-motion";
 
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { GeneratingHint, GeneratingLabel } from "@/components/ui/generation-indicator";
 import { Input } from "@/components/ui/input";
 import { useGenerateTimeline } from "@/lib/hooks/use-generate-timeline";
 import { useWorkspaceContext } from "@/lib/workspace/context";
@@ -56,10 +57,10 @@ export function TimelinePage() {
         <form onSubmit={onGenerate} className="flex flex-wrap items-end gap-4 pb-5 border-b border-black/[0.08]">
           <label className="flex flex-col gap-1 min-w-[100px]">
             <span className="panel-label text-slate-400">
-              时间线比例
+              详细程度 (0~1)
             </span>
             <Input
-              aria-label="时间线比例"
+              aria-label="详细程度 (0~1)"
               type="number"
               step="0.1"
               {...register("timeline_ratio")}
@@ -79,23 +80,27 @@ export function TimelinePage() {
           <div className="flex items-center gap-2 pb-0.5">
             <Button
               type="submit"
-              disabled={timeline.isPending || !username}
+              disabled={timeline.isLocked || !username}
             >
               <Sparkles className="mr-2 h-4 w-4" />
-              {timeline.isPending ? "生成中" : "生成时间线"}
+              {timeline.isPending ? <GeneratingLabel text="生成中" /> : "生成时间线"}
             </Button>
             {timeline.canRetry && (
               <Button
                 type="button"
                 variant="secondary"
                 onClick={() => void timeline.retry()}
-                disabled={timeline.isPending}
+                disabled={timeline.isLocked}
               >
                 重试
               </Button>
             )}
           </div>
         </form>
+
+        {timeline.isPending && (
+          <GeneratingHint text="正在生成时间轴，通常需要 30 到 90 秒" />
+        )}
 
         {/* Error banner */}
         {timeline.error && (
@@ -141,7 +146,7 @@ export function TimelinePage() {
                 ))}
               </div>
             </>
-          ) : !timeline.isPending ? (
+          ) : !timeline.isLocked ? (
             <motion.div
               className="flex flex-col items-center justify-center py-16 text-center"
               initial={{ opacity: 0, y: 8 }}

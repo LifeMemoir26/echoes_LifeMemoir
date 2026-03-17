@@ -10,6 +10,7 @@ import { motion } from "framer-motion";
 
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { GeneratingHint, GeneratingLabel } from "@/components/ui/generation-indicator";
 import { Input } from "@/components/ui/input";
 import { useGenerateMemoir } from "@/lib/hooks/use-generate-memoir";
 import { useWorkspaceContext } from "@/lib/workspace/context";
@@ -24,6 +25,31 @@ const formSchema = z.object({
 });
 
 type FormValues = z.infer<typeof formSchema>;
+
+function splitMemoirBlocks(text: string): string[] {
+  return text
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+}
+
+function MemoirBody({ text }: { text: string }) {
+  return (
+    <article className="memoir-prose text-slate-800">
+      {splitMemoirBlocks(text).map((block, index) =>
+        block === "✦" ? (
+          <div key={`divider-${index}`} className="memoir-divider ornament-divider my-8">
+            <span className="font-[var(--font-display)] text-base text-[#C4A882]">
+              ✦
+            </span>
+          </div>
+        ) : (
+          <p key={`paragraph-${index}`}>{block}</p>
+        )
+      )}
+    </article>
+  );
+}
 
 export function MemoirPage() {
   const { username } = useWorkspaceContext();
@@ -48,7 +74,7 @@ export function MemoirPage() {
 
   const onFormSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (memoir.isPending || inFlightRef.current) return;
+    if (memoir.isLocked || inFlightRef.current) return;
     inFlightRef.current = true;
     try {
       await onMemoirSubmit(event);
@@ -61,7 +87,7 @@ export function MemoirPage() {
 
   return (
     <div className="min-h-screen">
-      <main className="mx-auto max-w-2xl px-6 py-8">
+      <main className="mx-auto max-w-3xl px-6 py-8">
         {/* Page heading */}
         <div className="mb-6">
           <h1 className="font-[var(--font-heading)] text-3xl text-slate-900">
@@ -98,15 +124,19 @@ export function MemoirPage() {
             <div className="flex items-center gap-2 pb-0.5">
               <Button
                 type="submit"
-                disabled={memoir.isPending || !username}
+                disabled={memoir.isLocked || !username}
                 aria-label="生成回忆录"
               >
                 <Sparkles className="mr-2 h-4 w-4" />
-                {memoir.isPending ? "生成中" : "生成回忆录"}
+                {memoir.isPending ? <GeneratingLabel text="生成中" /> : "生成回忆录"}
               </Button>
             </div>
           </div>
         </form>
+
+        {memoir.isPending && (
+          <GeneratingHint text="正在生成回忆录，通常需要 30 到 90 秒" />
+        )}
 
         {/* Error banner */}
         {memoir.normalizedError && (
@@ -132,11 +162,18 @@ export function MemoirPage() {
               animate={{ opacity: 1, scale: 1 }}
               transition={smooth}
             >
-              {/* Paper container */}
-              <div className="rounded-2xl border border-black/[0.06] bg-white/90 px-8 py-10 shadow-[var(--shadow-perfect)] backdrop-blur-[10px] sm:px-12 sm:py-14">
+              <div className="relative overflow-hidden rounded-[30px] border border-[#E8DDD0] bg-[linear-gradient(180deg,rgba(255,255,255,0.97),rgba(247,242,235,0.94))] px-5 py-6 shadow-[0_28px_80px_rgba(120,90,60,0.14)] backdrop-blur-[10px] sm:px-8 sm:py-8">
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute -left-12 bottom-8 h-28 w-28 rounded-full bg-[#F6EBDD] blur-3xl"
+                />
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute -right-10 top-6 h-32 w-32 rounded-full bg-[#F3E6D6] blur-3xl"
+                />
                 {/* Title ornament */}
-                <div className="mb-8 text-center">
-                  <p className="font-[var(--font-display)] text-xs uppercase tracking-[0.3em] text-[#C4A882]">
+                <div className="relative mb-8 text-center">
+                  <p className="font-[var(--font-display)] text-2xl tracking-[0.18em] text-[#B79267] sm:text-3xl">
                     回忆录
                   </p>
                   <div className="ornament-divider mt-3">
@@ -144,33 +181,29 @@ export function MemoirPage() {
                   </div>
                 </div>
 
-                {/* Prose body — split paragraphs on double-newline */}
-                <article className="memoir-prose text-slate-800">
-                  {memoir.data.memoir.split(/\n{2,}/).map((para, i) => (
-                    <p key={i}>{para}</p>
-                  ))}
-                </article>
+                <div className="relative mx-auto max-w-2xl rounded-[24px] border border-white/85 bg-[linear-gradient(180deg,rgba(255,255,255,0.78),rgba(255,255,255,0.60))] px-6 py-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] sm:px-10 sm:py-10">
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-y-8 left-4 w-px bg-gradient-to-b from-transparent via-[#E6D9C7] to-transparent"
+                  />
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-y-8 right-4 w-px bg-gradient-to-b from-transparent via-[#E6D9C7] to-transparent"
+                  />
+                  <MemoirBody text={memoir.data.memoir} />
+                </div>
 
-                {/* Bottom ornament */}
-                <div className="ornament-divider mt-10">
-                  <span className="font-[var(--font-display)] text-lg">✦</span>
+                <div className="mt-8 border-t border-black/[0.06] pt-5">
+                  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-slate-400">
+                    <span>共 <span className="font-semibold text-[#A2845E]">{memoir.data.length}</span> 字</span>
+                    {memoir.data.generated_at && (
+                      <span>生成于 {memoir.data.generated_at.slice(0, 10)}</span>
+                    )}
+                  </div>
                 </div>
               </div>
-
-              {/* Metadata footer */}
-              <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-slate-400">
-                <span>共 <span className="font-semibold text-[#A2845E]">{memoir.data.length}</span> 字</span>
-                {memoir.data.generated_at && (
-                  <span>生成于 {memoir.data.generated_at.slice(0, 10)}</span>
-                )}
-                {memoir.data.trace_id && (
-                  <span className="font-mono text-[10px] text-slate-300">
-                    Trace: {memoir.data.trace_id}
-                  </span>
-                )}
-              </div>
             </motion.div>
-          ) : !memoir.isPending ? (
+          ) : !memoir.isLocked ? (
             <motion.div
               className="flex flex-col items-center justify-center py-16 text-center"
               initial={{ opacity: 0, y: 8 }}
