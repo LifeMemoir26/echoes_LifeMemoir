@@ -1,5 +1,6 @@
 import { ApiRequestError, apiGet, apiPost, apiPostWithSignal } from "@/lib/api/client";
 import type {
+  GenerationStatusData,
   MemoirGenerateData,
   MemoirGenerateRequest,
   TimelineGenerateData,
@@ -41,6 +42,22 @@ function validateTimelineData(data: TimelineGenerateData): TimelineGenerateData 
   return data;
 }
 
+function validateGenerationStatusData(data: GenerationStatusData): GenerationStatusData {
+  if (
+    typeof data.username !== "string" ||
+    typeof data.timeline_active !== "boolean" ||
+    typeof data.memoir_active !== "boolean" ||
+    typeof data.checked_at !== "string"
+  ) {
+    throw new ApiRequestError({
+      code: "CONTRACT_ERROR",
+      message: "生成状态响应结构不符合接口契约",
+      retryable: false
+    });
+  }
+  return data;
+}
+
 export async function generateMemoir(payload: MemoirGenerateRequest): Promise<MemoirGenerateData> {
   const data = await apiPost<MemoirGenerateData, MemoirGenerateRequest>("/generate/memoir", {
     username: payload.username,
@@ -56,6 +73,11 @@ export async function getSavedMemoir(signal?: AbortSignal): Promise<MemoirGenera
   const data = await apiGet<MemoirGenerateData | null>("/generate/memoir/saved", signal);
   if (!data) return null;
   return validateMemoirData(data);
+}
+
+export async function getGenerationStatus(signal?: AbortSignal): Promise<GenerationStatusData> {
+  const data = await apiGet<GenerationStatusData>("/generate/status", signal);
+  return validateGenerationStatusData(data);
 }
 
 export async function generateTimeline(

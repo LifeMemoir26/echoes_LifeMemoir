@@ -16,6 +16,7 @@ from .deps import get_current_username
 from .errors import error_response, new_trace_id, normalize_workflow_failure
 from .models import (
     ApiResponse,
+    GenerationStatusData,
     MemoirGenerateData,
     MemoirGenerateRequest,
     TimelineGenerateData,
@@ -27,8 +28,8 @@ from .operation_registry import operation_registry
 router = APIRouter()
 
 
-def _generation_operation_key(username: str) -> str:
-    return f"generate:{username}"
+def _generation_operation_key(username: str, mode: str) -> str:
+    return f"generate:{mode}:{username}"
 
 
 @router.post("/generate/timeline", response_model=ApiResponse[TimelineGenerateData])
@@ -44,12 +45,12 @@ async def api_generate_timeline(
             error_message="token username does not match request username",
             trace_id=trace_id,
         )
-    operation_key = _generation_operation_key(payload.username.strip())
+    operation_key = _generation_operation_key(payload.username.strip(), "timeline")
     if not await operation_registry.try_start(operation_key):
         raise error_response(
             status_code=409,
             error_code="GENERATION_ALREADY_RUNNING",
-            error_message="another generation task is already running for this user",
+            error_message="another timeline generation task is already running for this user",
             trace_id=trace_id,
         )
     try:
@@ -114,12 +115,12 @@ async def api_generate_memoir(
             error_message="token username does not match request username",
             trace_id=trace_id,
         )
-    operation_key = _generation_operation_key(payload.username.strip())
+    operation_key = _generation_operation_key(payload.username.strip(), "memoir")
     if not await operation_registry.try_start(operation_key):
         raise error_response(
             status_code=409,
             error_code="GENERATION_ALREADY_RUNNING",
-            error_message="another generation task is already running for this user",
+            error_message="another memoir generation task is already running for this user",
             trace_id=trace_id,
         )
     try:
@@ -174,6 +175,28 @@ async def api_generate_memoir(
 
 def _output_dir(username: str) -> Path:
     return get_data_root() / username / "output"
+
+
+@router.get("/generate/status", response_model=ApiResponse[GenerationStatusData])
+async def api_get_generation_status(
+    current_username: Annotated[str, Depends(get_current_username)],
+) -> ApiResponse[GenerationStatusData]:
+    trace_id = new_trace_id("generate-status")
+    timeline_active = await operation_registry.is_active(
+        _generation_operation_key(current_username, "timeline")
+    )
+    memoir_active = await operation_registry.is_active(
+        _generation_operation_key(current_username, "memoir")
+    )
+    return ApiResponse(
+        status="success",
+        data=GenerationStatusData(
+            username=current_username,
+            timeline_active=timeline_active,
+            memoir_active=memoir_active,
+            checked_at=datetime.utcnow(),
+        ),
+    )
 
 
 @router.get("/generate/timeline/saved", response_model=ApiResponse[TimelineGenerateData])

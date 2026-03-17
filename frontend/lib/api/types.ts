@@ -49,6 +49,13 @@ export type TimelineGenerateData = {
   trace_id: string;
 };
 
+export type GenerationStatusData = {
+  username: string;
+  timeline_active: boolean;
+  memoir_active: boolean;
+  checked_at: string;
+};
+
 export type SessionCreateRequest = {
   username: string;
 };

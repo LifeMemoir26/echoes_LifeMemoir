@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
+from ....application.contracts.common import AppError
 from ....application.workflows.core.base import WorkflowBase
 from ....application.workflows.core.errors import map_exception_to_app_error
 from .runtime import GenerateWorkflowRuntime
@@ -232,9 +233,37 @@ async def run_generate(
     if result.get("status") == "failed":
         return result
 
+    all_events = result.get("all_events", [])
+    if not all_events:
+        return {
+            "status": "failed",
+            "errors": [
+                AppError(
+                    error_code="GENERATE_SOURCE_EVENTS_MISSING",
+                    error_message="no structured life events found; run knowledge structuring with actual memoir/interview material first",
+                    retryable=False,
+                    failed_node="load_data",
+                    trace_id=thread_id,
+                ).model_dump()
+            ],
+        }
+
     generated_at = result.get("metadata", {}).get("generated_at", datetime.now().isoformat())
     if mode == "timeline":
         timeline = result.get("timeline", [])
+        if not timeline:
+            return {
+                "status": "failed",
+                "errors": [
+                    AppError(
+                        error_code="TIMELINE_EMPTY_RESULT",
+                        error_message="timeline generation returned no entries; please retry or adjust the source material",
+                        retryable=True,
+                        failed_node="generate_timeline",
+                        trace_id=thread_id,
+                    ).model_dump()
+                ],
+            }
         return {
             "timeline": timeline,
             "event_count": len(timeline),
@@ -242,6 +271,19 @@ async def run_generate(
         }
 
     memoir_text = result.get("memoir", "")
+    if not memoir_text:
+        return {
+            "status": "failed",
+            "errors": [
+                AppError(
+                    error_code="MEMOIR_EMPTY_RESULT",
+                    error_message="memoir generation returned empty content; please retry or adjust the source material",
+                    retryable=True,
+                    failed_node="generate_memoir",
+                    trace_id=thread_id,
+                ).model_dump()
+            ],
+        }
     return {
         "memoir": memoir_text,
         "length": len(memoir_text) if memoir_text else 0,

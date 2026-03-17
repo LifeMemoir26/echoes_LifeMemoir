@@ -109,6 +109,13 @@ class MemoirGenerateData(BaseModel):
     trace_id: str
 
 
+class GenerationStatusData(BaseModel):
+    username: str
+    timeline_active: bool
+    memoir_active: bool
+    checked_at: datetime
+
+
 # ------------------------------------------------------------------
 # Auth models
 # ------------------------------------------------------------------
