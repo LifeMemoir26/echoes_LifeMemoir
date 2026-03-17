@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { clearToken, getToken, getSavedUsername, isTokenExpired } from "@/lib/auth/token";
+import { getAuthSession, logoutSession } from "@/lib/api/auth";
+import { clearSavedSession, getSavedUsername, saveSessionUsername } from "@/lib/auth/token";
 import type { NormalizedApiError, TimelineGenerateData, TimelineGenerateRequest } from "@/lib/api/types";
 
 // ── Timeline generation cache ────────────────────────────────────────────────
@@ -61,9 +62,9 @@ type WorkspaceContextValue = {
   setInterviewSummary: (value: InterviewSummary) => void;
   timelineSummary: TimelineSummary;
   setTimelineSummary: (value: TimelineSummary) => void;
-  token: string | null;
-  setToken: (value: string | null) => void;
+  authReady: boolean;
   isAuthenticated: boolean;
+  markAuthenticated: (username: string) => void;
   logout: () => void;
   // ── Cross-navigation state caches ──────────────────────────────────────────
   timelineCache: TimelineGenerationCache | null;
@@ -88,48 +89,81 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     eventCount: 0,
     generatedAt: null
   });
-  const [token, setToken] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [timelineCache, setTimelineCache] = useState<TimelineGenerationCache | null>(null);
   const [interviewMessagesCache, setInterviewMessagesCache] = useState<InterviewMessagesCache | null>(null);
 
-  // ── Bootstrap from localStorage (auth) + sessionStorage (caches) ──────────
-  useEffect(() => {
-    const stored = getToken();
-    if (stored && !isTokenExpired(stored)) {
-      setToken(stored);
-      const savedUsername = getSavedUsername();
-      if (savedUsername) {
-        setUsername(savedUsername);
+  const restoreCaches = useCallback((nextUsername: string) => {
+    setTimelineCache(null);
+    setInterviewMessagesCache(null);
 
-        // Restore timeline cache
-        try {
-          const raw = sessionStorage.getItem(ssKey("tl_cache", savedUsername));
-          if (raw) {
-            const parsed: TimelineGenerationCache = JSON.parse(raw);
-            if (isFresh(parsed.savedAt)) {
-              // Pending requests can't survive a full refresh — silently discard
-              if (parsed.phase !== "pending") {
-                setTimelineCache(parsed);
-              }
-            }
-          }
-        } catch { /* ignore malformed cache */ }
-
-        // Restore interview messages cache
-        try {
-          const raw = sessionStorage.getItem(ssKey("iv_cache", savedUsername));
-          if (raw) {
-            const parsed: InterviewMessagesCache = JSON.parse(raw);
-            if (isFresh(parsed.savedAt)) {
-              setInterviewMessagesCache(parsed);
-            }
-          }
-        } catch { /* ignore malformed cache */ }
+    try {
+      const raw = sessionStorage.getItem(ssKey("tl_cache", nextUsername));
+      if (raw) {
+        const parsed: TimelineGenerationCache = JSON.parse(raw);
+        if (isFresh(parsed.savedAt) && parsed.phase !== "pending") {
+          setTimelineCache(parsed);
+        }
       }
-    } else {
-      clearToken();
+    } catch {
+      // ignore malformed cache
+    }
+
+    try {
+      const raw = sessionStorage.getItem(ssKey("iv_cache", nextUsername));
+      if (raw) {
+        const parsed: InterviewMessagesCache = JSON.parse(raw);
+        if (isFresh(parsed.savedAt)) {
+          setInterviewMessagesCache(parsed);
+        }
+      }
+    } catch {
+      // ignore malformed cache
     }
   }, []);
+
+  const clearPersistedCaches = useCallback((targetUsername: string | null) => {
+    if (!targetUsername) return;
+    sessionStorage.removeItem(ssKey("tl_cache", targetUsername));
+    sessionStorage.removeItem(ssKey("iv_cache", targetUsername));
+  }, []);
+
+  const markAuthenticated = useCallback((nextUsername: string) => {
+    saveSessionUsername(nextUsername);
+    setUsername(nextUsername);
+    restoreCaches(nextUsername);
+    setIsAuthenticated(true);
+    setAuthReady(true);
+  }, [restoreCaches]);
+
+  // ── Bootstrap from server-side session + local cache hints ─────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function bootstrapAuth() {
+      try {
+        const session = await getAuthSession();
+        if (cancelled) return;
+        markAuthenticated(session.username);
+      } catch {
+        if (cancelled) return;
+        const savedUsername = getSavedUsername();
+        clearSavedSession();
+        clearPersistedCaches(savedUsername);
+        setUsername("");
+        setTimelineCache(null);
+        setInterviewMessagesCache(null);
+        setIsAuthenticated(false);
+        setAuthReady(true);
+      }
+    }
+    void bootstrapAuth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clearPersistedCaches, markAuthenticated]);
 
   // ── Persist timeline cache to sessionStorage on change ───────────────────
   useEffect(() => {
@@ -153,14 +187,27 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [interviewMessagesCache, username]);
 
-  const isAuthenticated = token !== null && !isTokenExpired(token);
-
   const logout = () => {
-    clearToken();
-    setToken(null);
+    const currentOrSavedUsername = username || getSavedUsername();
+    void logoutSession().catch(() => undefined);
+    clearSavedSession();
+    clearPersistedCaches(currentOrSavedUsername);
     setUsername("");
+    setActiveSessionId(null);
+    setLastTraceId(null);
+    setInterviewSummary({
+      status: null,
+      eventCount: 0,
+      lastEventId: null
+    });
+    setTimelineSummary({
+      eventCount: 0,
+      generatedAt: null
+    });
     setTimelineCache(null);
     setInterviewMessagesCache(null);
+    setIsAuthenticated(false);
+    setAuthReady(true);
     router.replace("/login");
   };
 
@@ -176,9 +223,9 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setInterviewSummary,
       timelineSummary,
       setTimelineSummary,
-      token,
-      setToken,
+      authReady,
       isAuthenticated,
+      markAuthenticated,
       logout,
       timelineCache,
       setTimelineCache,
@@ -186,7 +233,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setInterviewMessagesCache,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeSessionId, interviewMessagesCache, interviewSummary, isAuthenticated, lastTraceId, timelineCache, timelineSummary, token, username]
+    [activeSessionId, authReady, interviewMessagesCache, interviewSummary, isAuthenticated, lastTraceId, markAuthenticated, timelineCache, timelineSummary, username]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

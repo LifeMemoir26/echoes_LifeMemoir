@@ -1,4 +1,4 @@
-import { ApiRequestError, apiDelete, apiPatch, apiPost, getApiBaseUrl, getAuthHeaders, parseEnvelope } from "@/lib/api/client";
+import { ApiRequestError, apiDelete, apiPatch, apiPost, getApiBaseUrl, parseEnvelope } from "@/lib/api/client";
 import type {
   InterviewSseEnvelope,
   InterviewSseEventType,
@@ -93,7 +93,7 @@ export async function connectInterviewSse(
     signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
 
-  let headers: HeadersInit = { Accept: "text/event-stream", ...getAuthHeaders() };
+  let headers: HeadersInit = { Accept: "text/event-stream" };
   if (options.lastEventId) {
     headers = { ...headers, "Last-Event-ID": options.lastEventId };
   }
@@ -101,6 +101,7 @@ export async function connectInterviewSse(
   const response = await fetch(`${getApiBaseUrl()}/session/${options.sessionId}/events`, {
     method: "GET",
     headers,
+    credentials: "include",
     signal: controller.signal
   });
 

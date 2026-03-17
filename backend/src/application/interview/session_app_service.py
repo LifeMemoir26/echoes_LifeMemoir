@@ -304,6 +304,11 @@ class InterviewSessionAppService:
             await self.registry.publish(session_id, "completed", {"trace_id": trace_id, "status": "flush_completed", "at": datetime.now(timezone.utc).isoformat()})
 
     async def n_round_refresh_bg(self, record: Any, session_id: str, trace_id: str) -> None:
+        from src.app.api.v1.operation_registry import operation_registry
+
+        refresh_key = f"session-refresh:{session_id}"
+        if not await operation_registry.try_start(refresh_key):
+            return
         session = record.interview_session
         runtime = session.runtime
         storage = runtime.storage
@@ -389,3 +394,5 @@ class InterviewSessionAppService:
             await asyncio.gather(_enrich(), _supplements(), _anchors(), return_exceptions=True)
         except Exception as exc:
             await self.registry.publish(session_id, "error", {"error_code": "REFRESH_FAILED", "error_message": str(exc), "retryable": False, "trace_id": trace_id, "at": datetime.now(timezone.utc).isoformat()})
+        finally:
+            await operation_registry.finish(refresh_key)

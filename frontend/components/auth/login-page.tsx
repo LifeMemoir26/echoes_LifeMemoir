@@ -6,13 +6,12 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { login } from "@/lib/api/auth";
-import { saveToken } from "@/lib/auth/token";
 import { useWorkspaceContext } from "@/lib/workspace/context";
 import { normalizeUnknownError } from "@/lib/api/client";
 
 export function LoginPage() {
   const router = useRouter();
-  const { setToken, setUsername } = useWorkspaceContext();
+  const { markAuthenticated } = useWorkspaceContext();
   const [username, setUsernameField] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -24,9 +23,7 @@ export function LoginPage() {
     setLoading(true);
     try {
       const data = await login(username.trim(), password);
-      saveToken(data.access_token, data.username);
-      setToken(data.access_token);
-      setUsername(data.username);
+      markAuthenticated(data.username);
       router.replace("/");
     } catch (err) {
       const normalized = normalizeUnknownError(err, "登录失败，请重试");

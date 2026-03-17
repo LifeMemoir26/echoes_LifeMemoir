@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getApiBaseUrl, getAuthHeaders, normalizeUnknownError } from "@/lib/api/client";
+import { getApiBaseUrl, normalizeUnknownError } from "@/lib/api/client";
 import { triggerReprocess, cancelStructuring } from "@/lib/api/knowledge";
 import { knowledgeQueryKeys } from "@/lib/query-keys";
 
@@ -110,7 +110,8 @@ async function openSseStream(materialId: string, invalidate: () => void) {
   try {
     const response = await fetch(`${getApiBaseUrl()}/knowledge/materials/${materialId}/events`, {
       method: "GET",
-      headers: { Accept: "text/event-stream", ...getAuthHeaders() },
+      headers: { Accept: "text/event-stream" },
+      credentials: "include",
       signal: controller.signal,
     });
 

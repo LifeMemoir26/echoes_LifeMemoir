@@ -2,10 +2,14 @@ from pathlib import Path
 
 from src.domain.schemas.knowledge import CharacterProfile, LifeEvent
 from src.infra.database.sqlite_client import SQLiteClient
+from src.infra.database.store.chunk_store import ChunkStore
 
 
 def test_sqlite_client_compat_methods_delegate_to_stores(tmp_path: Path):
     client = SQLiteClient(username="u1", data_base_dir=tmp_path)
+
+    assert client.conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    assert client.conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
 
     inserted = client.insert_events(
         [
@@ -43,3 +47,12 @@ def test_sqlite_client_compat_methods_delegate_to_stores(tmp_path: Path):
     assert client.get_material_by_id("m1") is None
 
     client.close()
+
+
+def test_chunk_store_uses_sqlite_busy_timeout_and_wal(tmp_path: Path):
+    store = ChunkStore(username="u1", data_base_dir=tmp_path)
+
+    assert store.conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    assert store.conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+
+    store.close()

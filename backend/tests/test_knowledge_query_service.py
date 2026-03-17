@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,8 +25,19 @@ def test_read_material_content_success(tmp_path: Path, monkeypatch: pytest.Monke
     svc = KnowledgeQueryService()
     content = svc.read_material_content("u1", "materials/note.txt")
 
-    assert content.startswith("helloworld")
+    assert content.startswith("helloÿworld")
     assert "�" in content
+
+
+def test_read_material_content_rejects_path_traversal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(qs_mod, "get_data_root", lambda: tmp_path)
+    outside_file = tmp_path / "secret.txt"
+    outside_file.write_text("secret", encoding="utf-8")
+
+    svc = KnowledgeQueryService()
+
+    with pytest.raises(ValueError, match="INVALID_STORAGE_PATH"):
+        svc.read_material_content("u1", "../secret.txt")
 
 
 def test_list_records_maps_preview_and_lengths(monkeypatch: pytest.MonkeyPatch):
@@ -169,3 +181,44 @@ def test_reprocess_publishes_unified_stage_payload(monkeypatch: pytest.MonkeyPat
     ]
     assert all("stage_index" in e and "stage_total" in e for e in status_events)
     assert completed_events[0]["stage"] == "completed"
+
+
+def test_process_uploaded_knowledge_file_returns_relative_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(qs_mod, "get_data_root", lambda: tmp_path)
+
+    async def fake_process_knowledge_file(**_kwargs):
+        return {"status": "success"}
+
+    monkeypatch.setattr(qs_mod, "process_knowledge_file", fake_process_knowledge_file)
+
+    upload = SimpleNamespace(
+        filename="memo.txt",
+        _chunks=[b"hello world"],
+        _idx=0,
+    )
+
+    async def _read(_size: int):
+        if upload._idx >= len(upload._chunks):
+            return b""
+        chunk = upload._chunks[upload._idx]
+        upload._idx += 1
+        return chunk
+
+    async def _close():
+        return None
+
+    upload.read = _read
+    upload.close = _close
+
+    svc = KnowledgeQueryService()
+    result = asyncio.run(
+        svc.process_uploaded_knowledge_file(
+            username="alice",
+            upload=upload,
+            trace_id="trace-1",
+            max_upload_bytes=1024,
+        )
+    )
+
+    assert result["stored_path"].startswith("materials/")
+    assert not str(result["stored_path"]).startswith(str(tmp_path))

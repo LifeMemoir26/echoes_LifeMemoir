@@ -37,10 +37,18 @@
 
 - `POST /auth/login`
   - Request: `{ "username": "alice", "password": "..." }`
-  - Success data: `{ "access_token": "...", "token_type": "bearer", "username": "alice" }`
+  - Success data: `{ "access_token": "", "token_type": "session_cookie", "username": "alice" }`
+  - Side effect: backend writes `HttpOnly` session cookie
   - Errors: `INVALID_CREDENTIALS` (401)
 
-All subsequent endpoints require `Authorization: Bearer <token>` header.
+- `GET /auth/me`
+  - Success data: `{ "username": "alice" }`
+  - Errors: `UNAUTHORIZED` (401), `TOKEN_EXPIRED` (401)
+
+- `POST /auth/logout`
+  - Success data: `{ "logged_out": true }`
+
+All subsequent endpoints authenticate with the session cookie. Bearer header remains only as a backend compatibility fallback.
 
 ## Interview Session
 
@@ -52,12 +60,15 @@ All subsequent endpoints require `Authorization: Bearer <token>` header.
 - `POST /session/{session_id}/message`
   - Request: `{ "speaker": "user", "content": "...", "timestamp": optional }`
   - Use when user sends one turn.
+  - Errors: `SESSION_OPERATION_ALREADY_RUNNING` (409)
 
 - `POST /session/{session_id}/flush`
   - Forces workflow flush.
+  - Errors: `SESSION_OPERATION_ALREADY_RUNNING` (409)
 
 - `DELETE /session/{session_id}`
   - Closes active session.
+  - Errors: `SESSION_OPERATION_ALREADY_RUNNING` (409)
 
 - `PATCH /session/{session_id}/pending-event/{event_id}/priority`
   - Toggles a pending event's priority flag and re-sorts the list.
@@ -78,12 +89,14 @@ All subsequent endpoints require `Authorization: Bearer <token>` header.
   - Supported file types: text (`.txt`, `.md`, `.markdown`, `text/*`).
   - Upload is persisted to `data/{username}/materials`.
   - Returns metadata: `uploaded_at`, `original_filename`, `stored_path`, `trace_id`.
+  - Errors: `KNOWLEDGE_OPERATION_ALREADY_RUNNING` (409)
 
 - `POST /knowledge/upload-material` (`multipart/form-data`)
   - Fields: `username`, `files` (multiple), `display_name` (optional), `material_context` (optional), `skip_processing` (optional bool), `material_type` (optional: `"document" | "interview"`, default `"document"`)
   - Batch upload with optional immediate knowledge extraction.
   - Success data: `{ "items": [...], "total_files": N, "success_count": N }`
   - Each item: `{ "file_name", "status": "success"|"error", "material_id", "events_count", "error_message" }`
+  - Errors: `KNOWLEDGE_OPERATION_ALREADY_RUNNING` (409)
 
 ### 素材管理
 
@@ -103,7 +116,7 @@ All subsequent endpoints require `Authorization: Bearer <token>` header.
 
 - `POST /knowledge/materials/{material_id}/reprocess`
   - Triggers async re-structuring workflow. Returns immediately.
-  - Errors: `MATERIAL_NOT_FOUND` (404), `MATERIAL_FILE_MISSING` (404), `MATERIAL_ALREADY_PROCESSING` (409)
+  - Errors: `MATERIAL_NOT_FOUND` (404), `MATERIAL_FILE_MISSING` (404), `MATERIAL_ALREADY_PROCESSING` (409), `KNOWLEDGE_OPERATION_ALREADY_RUNNING` (409)
 
 - `POST /knowledge/materials/{material_id}/cancel`
   - Cancels in-progress structuring task, resets status to `pending`.
@@ -135,10 +148,12 @@ All subsequent endpoints require `Authorization: Bearer <token>` header.
 - `POST /generate/timeline`
   - Request: `{ "username": "alice", "ratio": 0.3, "user_preferences": "...", "auto_save": true }`
   - Response fields: `timeline`, `event_count`, `generated_at`, `trace_id`
+  - Errors: `GENERATION_ALREADY_RUNNING` (409)
 
 - `POST /generate/memoir`
   - Request: `{ "username": "alice", "target_length": 2000, "user_preferences": "...", "auto_save": true }`
   - Response fields: `memoir`, `length`, `generated_at`, `trace_id`
+  - Errors: `GENERATION_ALREADY_RUNNING` (409)
 
 - `GET /generate/timeline/saved`
   - Returns previously saved timeline (or `data: null` if none exists).

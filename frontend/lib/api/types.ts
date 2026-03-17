@@ -73,6 +73,14 @@ export type LoginData = {
   username: string;
 };
 
+export type AuthSessionData = {
+  username: string;
+};
+
+export type LogoutData = {
+  logged_out: boolean;
+};
+
 export type SessionCreateData = {
   session_id: string;
   thread_id: string;

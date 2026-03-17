@@ -103,8 +103,10 @@ class EmbeddingConfig(BaseSettings):
                 return keys
         return []
 
-    class Config:
-        env_prefix = "EMBEDDING_"
+    model_config = SettingsConfigDict(
+        env_prefix="EMBEDDING_",
+        extra="ignore",
+    )
 
 
 class ExtractionConfig(BaseSettings):
@@ -120,8 +122,10 @@ class ExtractionConfig(BaseSettings):
     
     max_retries: int = Field(default=3, description="失败重试次数")
     
-    class Config:
-        env_prefix = "EXTRACTION_"
+    model_config = SettingsConfigDict(
+        env_prefix="EXTRACTION_",
+        extra="ignore",
+    )
 
 
 class InterviewAssistanceConfig(BaseSettings):
@@ -150,8 +154,10 @@ class InterviewAssistanceConfig(BaseSettings):
     n_refresh_interval: int = Field(default=5, description="每 n 轮对话触发辅助刷新")
     summary_queue_size: int = Field(default=5, description="SummaryQueue 固定容量（批次数）")
 
-    class Config:
-        env_prefix = "INTERVIEW_"
+    model_config = SettingsConfigDict(
+        env_prefix="INTERVIEW_",
+        extra="ignore",
+    )
 
 
 class GenerationConfig(BaseSettings):
@@ -168,8 +174,10 @@ class GenerationConfig(BaseSettings):
         description="回忆录生成时的语言样本数量"
     )
     
-    class Config:
-        env_prefix = "GENERATION_"
+    model_config = SettingsConfigDict(
+        env_prefix="GENERATION_",
+        extra="ignore",
+    )
 
 
 class AsrConfig(BaseSettings):
@@ -177,8 +185,10 @@ class AsrConfig(BaseSettings):
     appid: str = Field(default="", description="讯飞 APPID")
     api_key: str = Field(default="", description="讯飞 API Key")
 
-    class Config:
-        env_prefix = "ASR_"
+    model_config = SettingsConfigDict(
+        env_prefix="ASR_",
+        extra="ignore",
+    )
 
 
 class OrchestrationConfig(BaseSettings):
@@ -189,8 +199,10 @@ class OrchestrationConfig(BaseSettings):
         description="当前仅支持 langgraph 编排路径"
     )
 
-    class Config:
-        env_prefix = "ORCHESTRATION_"
+    model_config = SettingsConfigDict(
+        env_prefix="ORCHESTRATION_",
+        extra="ignore",
+    )
 
 
 class KnowledgeExtractionSettings(BaseSettings):
@@ -206,11 +218,11 @@ class KnowledgeExtractionSettings(BaseSettings):
     # 调试模式
     debug: bool = Field(default=False, description="调试模式")
     
-    model_config = {
-        "env_file": ".env",
-        "env_nested_delimiter": "__",
-        "extra": "ignore",
-    }
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_nested_delimiter="__",
+        extra="ignore",
+    )
 
 
 @lru_cache()

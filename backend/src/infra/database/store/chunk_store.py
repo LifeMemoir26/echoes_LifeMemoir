@@ -14,6 +14,9 @@ from ....domain.schemas.chunk import ChunkRow, SummaryRow, HybridSearchResult, C
 
 logger = logging.getLogger(__name__)
 
+_SQLITE_TIMEOUT_SECONDS = 30.0
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
+
 
 def _sanitize_fts5_query(text: str) -> str:
     """将原始文本转为安全的 FTS5 查询字符串。
@@ -70,8 +73,15 @@ class ChunkStore:
         
         try:
             # 连接数据库（allow_sqlite_extension 在 3.12+ 需要 check_same_thread）
-            self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self.conn = sqlite3.connect(
+                str(self.db_path),
+                check_same_thread=False,
+                timeout=_SQLITE_TIMEOUT_SECONDS,
+            )
             self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+            self.conn.execute("PRAGMA foreign_keys=ON")
 
             # 尝试加载 sqlite-vec 扩展
             self._vec_available = self._load_vec_extension()
@@ -753,4 +763,3 @@ class ChunkStore:
         if self.conn:
             self.conn.close()
             logger.info("ChunkStore已关闭")
-

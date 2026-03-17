@@ -14,8 +14,7 @@ def _reload_security():
 
 
 def test_dev_env_allows_fallback_secret(monkeypatch):
-    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
-    monkeypatch.setenv("ECHOES_ENV", "development")
+    monkeypatch.setenv("JWT_SECRET_KEY", "dev-secret-key-that-is-long-enough")
 
     mod = _reload_security()
 
@@ -23,9 +22,9 @@ def test_dev_env_allows_fallback_secret(monkeypatch):
     assert mod.decode_access_token(token) == "alice"
 
 
-def test_prod_env_requires_secret(monkeypatch):
+def test_secret_is_required_in_all_environments(monkeypatch):
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
-    monkeypatch.setenv("ECHOES_ENV", "production")
+    monkeypatch.setenv("ECHOES_ENV", "development")
 
     with pytest.raises(RuntimeError, match="JWT_SECRET_KEY must be set"):
         _reload_security()

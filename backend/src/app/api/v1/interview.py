@@ -14,6 +14,7 @@ from src.application.interview.session_app_service import InterviewRouteError, I
 from .deps import get_current_username
 from .errors import build_error, error_response
 from .models import ApiResponse, SessionActionData, SessionCreateData, SessionCreateRequest, SessionMessageRequest
+from .operation_registry import operation_registry
 from .session_registry import registry
 from .sse_utils import encode_sse, iso_now
 
@@ -21,6 +22,10 @@ router = APIRouter()
 _service = InterviewSessionAppService(registry)
 HEARTBEAT_SECONDS = 15
 IDLE_TIMEOUT_SECONDS = 300
+
+
+def _session_operation_key(session_id: str) -> str:
+    return f"session-operation:{session_id}"
 
 
 def _raise_route_error(err: InterviewRouteError) -> None:
@@ -108,6 +113,14 @@ async def send_message(
         _raise_route_error(err)
 
     trace_id = record.thread_id
+    operation_key = _session_operation_key(session_id)
+    if not await operation_registry.try_start(operation_key):
+        raise error_response(
+            status_code=409,
+            error_code="SESSION_OPERATION_ALREADY_RUNNING",
+            error_message="another session action is already running for this interview",
+            trace_id=trace_id,
+        )
     await registry.publish(
         session_id,
         "status",
@@ -118,7 +131,14 @@ async def send_message(
             "at": iso_now(),
         },
     )
-    asyncio.create_task(_service.process_message_bg(record, session_id, payload.speaker, payload.content, payload.timestamp, trace_id))
+
+    async def _run_message() -> None:
+        try:
+            await _service.process_message_bg(record, session_id, payload.speaker, payload.content, payload.timestamp, trace_id)
+        finally:
+            await operation_registry.finish(operation_key)
+
+    asyncio.create_task(_run_message())
 
     return ApiResponse(
         status="success",
@@ -143,12 +163,27 @@ async def flush_session(
         _raise_route_error(err)
 
     trace_id = record.thread_id
+    operation_key = _session_operation_key(session_id)
+    if not await operation_registry.try_start(operation_key):
+        raise error_response(
+            status_code=409,
+            error_code="SESSION_OPERATION_ALREADY_RUNNING",
+            error_message="another session action is already running for this interview",
+            trace_id=trace_id,
+        )
     await registry.publish(
         session_id,
         "status",
         {"trace_id": trace_id, "status": "flushing", "at": iso_now()},
     )
-    asyncio.create_task(_service.process_flush_bg(record, session_id, trace_id))
+
+    async def _run_flush() -> None:
+        try:
+            await _service.process_flush_bg(record, session_id, trace_id)
+        finally:
+            await operation_registry.finish(operation_key)
+
+    asyncio.create_task(_run_flush())
 
     return ApiResponse(
         status="success",
@@ -191,6 +226,14 @@ async def close_session(
     session_id: str,
     current_username: Annotated[str, Depends(get_current_username)],
 ) -> ApiResponse[SessionActionData]:
+    trace_id = f"session-{session_id}"
+    if await operation_registry.is_active(_session_operation_key(session_id)):
+        raise error_response(
+            status_code=409,
+            error_code="SESSION_OPERATION_ALREADY_RUNNING",
+            error_message="cannot close session while another session action is running",
+            trace_id=trace_id,
+        )
     try:
         record = await _service.close_session(session_id, current_username)
     except InterviewRouteError as err:

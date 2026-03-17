@@ -21,9 +21,14 @@ from .models import (
     TimelineGenerateData,
     TimelineGenerateRequest,
 )
+from .operation_registry import operation_registry
 
 
 router = APIRouter()
+
+
+def _generation_operation_key(username: str) -> str:
+    return f"generate:{username}"
 
 
 @router.post("/generate/timeline", response_model=ApiResponse[TimelineGenerateData])
@@ -37,6 +42,14 @@ async def api_generate_timeline(
             status_code=403,
             error_code="FORBIDDEN_USERNAME",
             error_message="token username does not match request username",
+            trace_id=trace_id,
+        )
+    operation_key = _generation_operation_key(payload.username.strip())
+    if not await operation_registry.try_start(operation_key):
+        raise error_response(
+            status_code=409,
+            error_code="GENERATION_ALREADY_RUNNING",
+            error_message="another generation task is already running for this user",
             trace_id=trace_id,
         )
     try:
@@ -55,6 +68,8 @@ async def api_generate_timeline(
             trace_id=trace_id,
             retryable=False,
         ) from exc
+    finally:
+        await operation_registry.finish(operation_key)
 
     if result.get("status") == "failed":
         app_error = normalize_workflow_failure(
@@ -99,6 +114,14 @@ async def api_generate_memoir(
             error_message="token username does not match request username",
             trace_id=trace_id,
         )
+    operation_key = _generation_operation_key(payload.username.strip())
+    if not await operation_registry.try_start(operation_key):
+        raise error_response(
+            status_code=409,
+            error_code="GENERATION_ALREADY_RUNNING",
+            error_message="another generation task is already running for this user",
+            trace_id=trace_id,
+        )
     try:
         result = await generate_memoir(
             username=payload.username,
@@ -115,6 +138,8 @@ async def api_generate_memoir(
             trace_id=trace_id,
             retryable=False,
         ) from exc
+    finally:
+        await operation_registry.finish(operation_key)
 
     if result.get("status") == "failed":
         app_error = normalize_workflow_failure(

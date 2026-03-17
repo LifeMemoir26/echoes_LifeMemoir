@@ -46,7 +46,7 @@ cd backend
 cp .env.example .env
 ```
 
-#### 2. 编辑 .env，填写 API 密钥（见 [必须配置项注释](backend/.env)）
+#### 2. 编辑 `.env`，至少填写 `JWT_SECRET_KEY`、`TRUSTED_HOSTS` 和 API 密钥（见 [必须配置项注释](backend/.env.example)）
 
 #### 3. 安装依赖 & 启动
 
@@ -66,6 +66,8 @@ python -m uvicorn src.app.main:app --reload --port 8000
 
 > 激活成功后提示符前会出现 `(.venv)`。
 > 看到 `Uvicorn running on http://127.0.0.1:8000` 即成功，**保持该终端运行**。
+
+部署到公网前不要使用开发启动方式；至少要提供强随机 `JWT_SECRET_KEY`、正确的 `TRUSTED_HOSTS`，并在 TLS 下启用 `SESSION_COOKIE_SECURE=true`。当前版本为单实例部署模型，生产环境默认会用运行时锁阻止多 worker / 多实例误启动。
 
 ## 启动前端
 

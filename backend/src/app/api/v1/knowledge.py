@@ -17,6 +17,7 @@ from .material_registry import material_registry
 
 from .deps import get_current_username
 from .errors import error_response, new_trace_id, normalize_workflow_failure
+from .operation_registry import operation_registry
 from .sse_utils import encode_sse
 from .models import (
     ApiResponse,
@@ -36,9 +37,15 @@ from .models import (
 router = APIRouter()
 _service = KnowledgeQueryService()
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+_MAX_TOTAL_UPLOAD_BYTES = 25 * 1024 * 1024
+_MAX_FILES_PER_UPLOAD = 5
 _ALLOWED_SUFFIX = {".txt", ".md", ".markdown"}
 _ALLOWED_MIME_PREFIX = ("text/",)
 _USERNAME_PATTERN = re.compile(r"^[\w\-]{1,128}$")
+
+
+def _knowledge_operation_key(username: str) -> str:
+    return f"knowledge:{username}"
 
 
 def _is_allowed_file(upload: UploadFile) -> bool:
@@ -93,6 +100,14 @@ async def process_knowledge_upload(
             error_message="only text/plain, .txt, .md, .markdown are supported",
             trace_id=trace_id,
         )
+    operation_key = _knowledge_operation_key(safe_username)
+    if not await operation_registry.try_start(operation_key):
+        raise error_response(
+            status_code=409,
+            error_code="KNOWLEDGE_OPERATION_ALREADY_RUNNING",
+            error_message="another knowledge processing task is already running for this user",
+            trace_id=trace_id,
+        )
 
     try:
         upload_result = await _service.process_uploaded_knowledge_file(
@@ -112,6 +127,8 @@ async def process_knowledge_upload(
         raise
     except OSError as exc:
         raise error_response(500, "STORAGE_INIT_FAILED", f"failed to create storage directory: {exc}", trace_id) from exc
+    finally:
+        await operation_registry.finish(operation_key)
 
     result = upload_result["workflow_result"]
     if result.get("status") == "failed":
@@ -206,16 +223,36 @@ async def upload_material(
             trace_id=trace_id,
         )
 
-    result = await _service.upload_materials(
-        username=safe_username,
-        files=files,
-        max_upload_bytes=_MAX_UPLOAD_BYTES,
-        is_allowed_file=_is_allowed_file,
-        display_name=display_name,
-        material_context=material_context,
-        material_type=material_type,
-        skip_processing=skip_processing,
-    )
+    if len(files) > _MAX_FILES_PER_UPLOAD:
+        raise error_response(
+            status_code=422,
+            error_code="TOO_MANY_FILES",
+            error_message=f"at most {_MAX_FILES_PER_UPLOAD} files are allowed per upload",
+            trace_id=trace_id,
+        )
+    operation_key = _knowledge_operation_key(safe_username)
+    if not await operation_registry.try_start(operation_key):
+        raise error_response(
+            status_code=409,
+            error_code="KNOWLEDGE_OPERATION_ALREADY_RUNNING",
+            error_message="another knowledge processing task is already running for this user",
+            trace_id=trace_id,
+        )
+
+    try:
+        result = await _service.upload_materials(
+            username=safe_username,
+            files=files,
+            max_upload_bytes=_MAX_UPLOAD_BYTES,
+            max_total_upload_bytes=_MAX_TOTAL_UPLOAD_BYTES,
+            is_allowed_file=_is_allowed_file,
+            display_name=display_name,
+            material_context=material_context,
+            material_type=material_type,
+            skip_processing=skip_processing,
+        )
+    finally:
+        await operation_registry.finish(operation_key)
     return ApiResponse(status="success", data=MaterialUploadData(items=[MaterialUploadItem(**i) for i in result["items"]], total_files=result["total_files"], success_count=result["success_count"]))
 
 
@@ -279,8 +316,24 @@ async def reprocess_material(
 ) -> ApiResponse[dict]:
     """Trigger re-structuring workflow for a material file. Returns immediately; progress via SSE."""
     trace_id = new_trace_id("reprocess")
-    ok, reason = await _service.start_reprocess(material_id, current_username, material_registry, trace_id)
+    operation_key = _knowledge_operation_key(current_username)
+    if not await operation_registry.try_start(operation_key):
+        raise error_response(
+            status_code=409,
+            error_code="KNOWLEDGE_OPERATION_ALREADY_RUNNING",
+            error_message="another knowledge processing task is already running for this user",
+            trace_id=trace_id,
+        )
+    ok, reason = await _service.start_reprocess(
+        material_id,
+        current_username,
+        material_registry,
+        trace_id,
+        operation_registry=operation_registry,
+        operation_key=operation_key,
+    )
     if not ok:
+        await operation_registry.finish(operation_key)
         if reason == "MATERIAL_NOT_FOUND":
             raise error_response(404, "MATERIAL_NOT_FOUND", f"material {material_id} not found", trace_id)
         if reason == "MATERIAL_FILE_MISSING":
@@ -304,6 +357,7 @@ async def cancel_material_processing(
 
     was_active = await material_registry.cancel_task(material_id)
     await material_registry.cleanup(material_id)
+    await operation_registry.finish(_knowledge_operation_key(current_username))
 
     return ApiResponse(status="success", data={"material_id": material_id, "was_active": was_active})
 

@@ -62,60 +62,68 @@
 | 方法   | 路径               | 说明         | 认证 |
 | ------ | ------------------ | ------------ | ---- |
 | POST   | `/auth/register`   | 用户注册     | 无   |
-| POST   | `/auth/login`      | 用户登录     | 无   |
+| POST   | `/auth/login`      | 用户登录，写入 HttpOnly Session Cookie | 无   |
+| GET    | `/auth/me`         | 获取当前登录用户 | Session Cookie / Bearer |
+| POST   | `/auth/logout`     | 清空 Session Cookie | 无   |
 
 ### 采访 Session
 
 | 方法   | 路径                              | 说明                   | 认证 |
 | ------ | --------------------------------- | ---------------------- | ---- |
-| POST   | `/session/create`                 | 创建采访会话           | JWT  |
-| POST   | `/session/{id}/message`           | 发送对话消息           | JWT  |
-| POST   | `/session/{id}/flush`             | 强制冲刷对话缓冲       | JWT  |
-| DELETE | `/session/{id}`                   | 关闭会话               | JWT  |
-| PATCH  | `/session/{id}/pending-event/{eid}/priority` | 切换待定事件优先级 | JWT  |
-| GET    | `/session/{id}/events`            | SSE 事件流             | JWT  |
+| POST   | `/session/create`                 | 创建采访会话           | Session Cookie / Bearer |
+| POST   | `/session/{id}/message`           | 发送对话消息           | Session Cookie / Bearer |
+| POST   | `/session/{id}/flush`             | 强制冲刷对话缓冲       | Session Cookie / Bearer |
+| DELETE | `/session/{id}`                   | 关闭会话               | Session Cookie / Bearer |
+| PATCH  | `/session/{id}/pending-event/{eid}/priority` | 切换待定事件优先级 | Session Cookie / Bearer |
+| GET    | `/session/{id}/events`            | SSE 事件流             | Session Cookie / Bearer |
 
 ### 知识管理
 
 | 方法   | 路径                                          | 说明                          | 认证 |
 | ------ | --------------------------------------------- | ----------------------------- | ---- |
-| POST   | `/knowledge/process`                          | 上传并处理素材（旧接口）      | JWT  |
-| POST   | `/knowledge/upload-material`                  | 批量上传素材                  | JWT  |
-| GET    | `/knowledge/materials`                        | 列出所有素材                  | JWT  |
-| GET    | `/knowledge/materials/{id}/content`           | 获取素材原文                  | JWT  |
-| DELETE | `/knowledge/materials/{id}`                   | 删除素材及关联数据            | JWT  |
-| POST   | `/knowledge/materials/{id}/reprocess`         | 触发重新结构化（异步）        | JWT  |
-| POST   | `/knowledge/materials/{id}/cancel`            | 取消进行中的结构化任务        | JWT  |
-| GET    | `/knowledge/materials/{id}/events`            | SSE 结构化进度流              | JWT  |
-| GET    | `/knowledge/records`                          | 列出文本 chunks               | JWT  |
-| GET    | `/knowledge/events`                           | 列出已提取事件                | JWT  |
-| GET    | `/knowledge/profiles`                         | 获取人物侧写                  | JWT  |
+| POST   | `/knowledge/process`                          | 上传并处理素材（旧接口）      | Session Cookie / Bearer |
+| POST   | `/knowledge/upload-material`                  | 批量上传素材                  | Session Cookie / Bearer |
+| GET    | `/knowledge/materials`                        | 列出所有素材                  | Session Cookie / Bearer |
+| GET    | `/knowledge/materials/{id}/content`           | 获取素材原文                  | Session Cookie / Bearer |
+| DELETE | `/knowledge/materials/{id}`                   | 删除素材及关联数据            | Session Cookie / Bearer |
+| POST   | `/knowledge/materials/{id}/reprocess`         | 触发重新结构化（异步）        | Session Cookie / Bearer |
+| POST   | `/knowledge/materials/{id}/cancel`            | 取消进行中的结构化任务        | Session Cookie / Bearer |
+| GET    | `/knowledge/materials/{id}/events`            | SSE 结构化进度流              | Session Cookie / Bearer |
+| GET    | `/knowledge/records`                          | 列出文本 chunks               | Session Cookie / Bearer |
+| GET    | `/knowledge/events`                           | 列出已提取事件                | Session Cookie / Bearer |
+| GET    | `/knowledge/profiles`                         | 获取人物侧写                  | Session Cookie / Bearer |
 
 ### 生成
 
 | 方法   | 路径                  | 说明           | 认证 |
 | ------ | --------------------- | -------------- | ---- |
-| POST   | `/generate/timeline`  | 生成时间线     | JWT  |
-| POST   | `/generate/memoir`    | 生成回忆录     | JWT  |
-| GET    | `/generate/timeline/saved` | 读取已保存时间线 | JWT  |
-| GET    | `/generate/memoir/saved`   | 读取已保存回忆录 | JWT  |
+| POST   | `/generate/timeline`  | 生成时间线     | Session Cookie / Bearer |
+| POST   | `/generate/memoir`    | 生成回忆录     | Session Cookie / Bearer |
+| GET    | `/generate/timeline/saved` | 读取已保存时间线 | Session Cookie / Bearer |
+| GET    | `/generate/memoir/saved`   | 读取已保存回忆录 | Session Cookie / Bearer |
 
 ### ASR（语音识别）
 
 | 方法   | 路径          | 说明                          | 认证 |
 | ------ | ------------- | ----------------------------- | ---- |
-| GET    | `/asr/sign`   | 获取讯飞 RTASR WebSocket 签名 | JWT  |
+| GET    | `/asr/sign`   | 获取讯飞 RTASR WebSocket 签名 | Session Cookie / Bearer |
 
 ## 启动
 
 ```bash
-cp .env.example .env          # 填入 API 密钥
+cp .env.example .env          # 填入 JWT_SECRET_KEY、TRUSTED_HOSTS 与 API 密钥
 uv venv && source .venv/bin/activate
 uv pip install .
 uvicorn src.app.main:app --reload --port 8000
 ```
 
 环境变量说明见 [.env.example](.env.example)。
+
+## 部署约束
+
+- 当前后端的 interview session 与 material SSE registry 仍是内存态，因此生产环境默认强制单实例锁，避免多 worker / 多实例把状态打散。
+- 需要横向扩容前，应先把这些状态迁到 Redis 等共享存储，再关闭 `ECHOES_ENABLE_SINGLE_INSTANCE_LOCK`。
+- 前端默认通过 `HttpOnly` Session Cookie 鉴权；如前后端跨站点部署且浏览器需携带 cookie，必须在 TLS 下配置 `SESSION_COOKIE_SAMESITE=none` 和 `SESSION_COOKIE_SECURE=true`。
 
 ## 开发检查
 

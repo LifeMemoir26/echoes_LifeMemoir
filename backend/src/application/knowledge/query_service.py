@@ -49,6 +49,16 @@ def _resolve_material_display_name(*, material_type: str, display_name: str, fil
 
 
 class KnowledgeQueryService:
+    @staticmethod
+    def _resolve_user_path(username: str, relative_path: str) -> Path:
+        user_root = (get_data_root() / username).resolve()
+        full_path = (user_root / relative_path).resolve()
+        try:
+            full_path.relative_to(user_root)
+        except ValueError as exc:
+            raise ValueError("INVALID_STORAGE_PATH") from exc
+        return full_path
+
     def list_records(self, username: str) -> list[dict[str, Any]]:
         store = ChunkStore(username=username)
         rows = store.get_all_chunks_with_status()
@@ -138,7 +148,7 @@ class KnowledgeQueryService:
         metadata_record = {
             "uploaded_at": uploaded_at.isoformat(),
             "original_filename": upload.filename,
-            "stored_path": str(stored_path),
+            "stored_path": f"materials/{stored_name}",
             "size_bytes": bytes_written,
             "trace_id": trace_id,
         }
@@ -155,7 +165,7 @@ class KnowledgeQueryService:
 
         return {
             "uploaded_at": uploaded_at,
-            "stored_path": str(stored_path),
+            "stored_path": metadata_record["stored_path"],
             "workflow_result": result,
             "original_filename": upload.filename,
         }
@@ -169,6 +179,7 @@ class KnowledgeQueryService:
         material_context: str = "",
         material_type: str = "document",
         skip_processing: bool = False,
+        max_total_upload_bytes: int | None = None,
     ) -> dict[str, Any]:
         data_root = get_data_root()
         material_store = MaterialStore(data_base_dir=data_root)
@@ -176,28 +187,38 @@ class KnowledgeQueryService:
 
         items: list[dict[str, Any]] = []
         success_count = 0
+        total_uploaded_bytes = 0
 
         for upload in files:
             if not upload.filename:
+                await upload.close()
                 items.append({"file_name": "<unknown>", "status": "error", "error_message": "missing filename"})
                 continue
             if not is_allowed_file(upload):
+                await upload.close()
                 items.append({"file_name": upload.filename, "status": "error", "error_message": "unsupported file type (only .txt / .md)"})
                 continue
 
-            content = await upload.read()
-            if len(content) > max_upload_bytes:
-                items.append({"file_name": upload.filename, "status": "error", "error_message": f"file exceeds {max_upload_bytes} bytes"})
-                continue
-
             try:
-                material_id, rel_path = material_store.save_file(
+                material_id, rel_path, file_size = await material_store.save_upload(
                     username=username,
-                    filename=upload.filename,
-                    content_bytes=content,
+                    upload=upload,
+                    max_upload_bytes=max_upload_bytes,
                     material_type=material_type,
                     display_name=display_name,
                 )
+                total_uploaded_bytes += file_size
+                if max_total_upload_bytes is not None and total_uploaded_bytes > max_total_upload_bytes:
+                    self._resolve_user_path(username, rel_path).unlink(missing_ok=True)
+                    total_uploaded_bytes -= file_size
+                    items.append(
+                        {
+                            "file_name": upload.filename,
+                            "status": "error",
+                            "error_message": f"total upload exceeds {max_total_upload_bytes} bytes",
+                        }
+                    )
+                    break
                 normalized_display_name = _resolve_material_display_name(
                     material_type=material_type,
                     display_name=display_name,
@@ -210,7 +231,7 @@ class KnowledgeQueryService:
                     material_type=material_type,
                     material_context=material_context,
                     file_path=rel_path,
-                    file_size=len(content),
+                    file_size=file_size,
                     display_name=normalized_display_name,
                     initial_status=MaterialLifecycle.initial_status(skip_processing=skip_processing),
                 )
@@ -219,7 +240,7 @@ class KnowledgeQueryService:
                     success_count += 1
                     items.append({"file_name": upload.filename, "status": "success", "material_id": material_id, "events_count": 0})
                 else:
-                    stored_path = (data_root / username / rel_path).resolve()
+                    stored_path = self._resolve_user_path(username, rel_path)
                     result = await process_knowledge_file(
                         file_path=stored_path,
                         username=username,
@@ -272,7 +293,7 @@ class KnowledgeQueryService:
         return SQLiteClient(username=username).get_material_by_id(material_id)
 
     def read_material_content(self, username: str, file_path: str) -> str:
-        full_path = (get_data_root() / username / file_path).resolve()
+        full_path = self._resolve_user_path(username, file_path)
         if not full_path.exists():
             raise FileNotFoundError("MATERIAL_FILE_MISSING")
         return full_path.read_text(encoding="utf-8", errors="replace")
@@ -284,7 +305,7 @@ class KnowledgeQueryService:
             return None
         file_path_rel: str | None = row.get("file_path")
         if file_path_rel:
-            full_path = (get_data_root() / username / file_path_rel).resolve()
+            full_path = self._resolve_user_path(username, file_path_rel)
             if full_path.exists():
                 full_path.unlink(missing_ok=True)
         filename = row.get("filename", "")
@@ -304,7 +325,15 @@ class KnowledgeQueryService:
         )
         return True
 
-    async def start_reprocess(self, material_id: str, username: str, material_registry: Any, trace_id: str) -> tuple[bool, str]:
+    async def start_reprocess(
+        self,
+        material_id: str,
+        username: str,
+        material_registry: Any,
+        trace_id: str,
+        operation_registry: Any | None = None,
+        operation_key: str | None = None,
+    ) -> tuple[bool, str]:
         db_client = SQLiteClient(username=username)
         row = db_client.get_material_by_id(material_id)
         if not row:
@@ -312,7 +341,10 @@ class KnowledgeQueryService:
         file_path_rel: str | None = row.get("file_path")
         if not file_path_rel:
             return False, "MATERIAL_FILE_MISSING"
-        full_path = (get_data_root() / username / file_path_rel).resolve()
+        try:
+            full_path = self._resolve_user_path(username, file_path_rel)
+        except ValueError:
+            return False, "MATERIAL_FILE_MISSING"
         if not full_path.exists():
             return False, "MATERIAL_FILE_MISSING"
         current_status = str(row.get("status", ""))
@@ -327,11 +359,34 @@ class KnowledgeQueryService:
             status=MaterialLifecycle.processing_status(),
         )
         await material_registry.create(material_id)
-        task = asyncio.create_task(self._reprocess_bg(material_id, full_path, username, row.get("material_context", ""), row.get("material_type", "document"), trace_id, material_registry))
+        task = asyncio.create_task(
+            self._reprocess_bg(
+                material_id,
+                full_path,
+                username,
+                row.get("material_context", ""),
+                row.get("material_type", "document"),
+                trace_id,
+                material_registry,
+                operation_registry=operation_registry,
+                operation_key=operation_key,
+            )
+        )
         material_registry.register_task(material_id, task)
         return True, "OK"
 
-    async def _reprocess_bg(self, material_id: str, file_path: Path, username: str, material_context: str, material_type: str, trace_id: str, material_registry: Any) -> None:
+    async def _reprocess_bg(
+        self,
+        material_id: str,
+        file_path: Path,
+        username: str,
+        material_context: str,
+        material_type: str,
+        trace_id: str,
+        material_registry: Any,
+        operation_registry: Any | None = None,
+        operation_key: str | None = None,
+    ) -> None:
         db_client = SQLiteClient(username=username)
         facade = WorkflowFacade(username=username)
         try:
@@ -410,3 +465,5 @@ class KnowledgeQueryService:
         finally:
             facade.close()
             await material_registry.cleanup(material_id)
+            if operation_registry is not None and operation_key:
+                await operation_registry.finish(operation_key)

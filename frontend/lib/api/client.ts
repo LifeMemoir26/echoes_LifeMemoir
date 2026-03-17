@@ -1,5 +1,4 @@
 import type { ApiEnvelope, ApiError, InterviewStreamError, NormalizedApiError } from "@/lib/api/types";
-import { getToken } from "@/lib/auth/token";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
@@ -149,7 +148,10 @@ function throwFirstApiErrorOrContract<TData>(envelope: ApiEnvelope<TData>): neve
 async function requestJson<TData>(input: RequestInfo | URL, init: RequestInit): Promise<TData> {
   let response: Response;
   try {
-    response = await fetch(input, init);
+    response = await fetch(input, {
+      ...init,
+      credentials: init.credentials ?? "include"
+    });
   } catch (error) {
     const errorName =
       error && typeof error === "object" && "name" in error ? String((error as { name?: unknown }).name) : "";
@@ -187,7 +189,7 @@ export async function apiPostWithSignal<TData, TRequest>(
 ): Promise<TData> {
   return requestJson<TData>(`${API_BASE_URL}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal
   });
@@ -195,22 +197,19 @@ export async function apiPostWithSignal<TData, TRequest>(
 
 export async function apiDelete<TData>(path: string): Promise<TData> {
   return requestJson<TData>(`${API_BASE_URL}${path}`, {
-    method: "DELETE",
-    headers: getAuthHeaders()
+    method: "DELETE"
   });
 }
 
 export async function apiPatch<TData>(path: string): Promise<TData> {
   return requestJson<TData>(`${API_BASE_URL}${path}`, {
-    method: "PATCH",
-    headers: getAuthHeaders()
+    method: "PATCH"
   });
 }
 
 export async function apiGet<TData>(path: string, signal?: AbortSignal): Promise<TData> {
   return requestJson<TData>(`${API_BASE_URL}${path}`, {
     method: "GET",
-    headers: getAuthHeaders(),
     signal
   });
 }
@@ -218,14 +217,8 @@ export async function apiGet<TData>(path: string, signal?: AbortSignal): Promise
 export async function apiPostFormData<TData>(path: string, formData: FormData): Promise<TData> {
   return requestJson<TData>(`${API_BASE_URL}${path}`, {
     method: "POST",
-    headers: getAuthHeaders(),
     body: formData,
   });
-}
-
-export function getAuthHeaders(): Record<string, string> {
-  const token = getToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export function getApiBaseUrl(): string {

@@ -7,7 +7,7 @@ import { useWorkspaceContext } from "@/lib/workspace/context";
 const emptySubscribe = () => () => {};
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useWorkspaceContext();
+  const { authReady, isAuthenticated } = useWorkspaceContext();
   const router = useRouter();
   // Returns false during SSR, true on client — avoids hydration mismatch without setState-in-effect
   const mounted = useSyncExternalStore(
@@ -17,12 +17,13 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (authReady && !isAuthenticated) {
       router.replace("/login");
     }
-  }, [isAuthenticated, router]);
+  }, [authReady, isAuthenticated, router]);
 
   if (!mounted) return null;
+  if (!authReady) return null;
   if (!isAuthenticated) return null;
 
   return <>{children}</>;

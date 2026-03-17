@@ -130,8 +130,16 @@ class LoginRequest(BaseModel):
 
 class LoginData(BaseModel):
     access_token: str = Field(default="")
-    token_type: str = Field(default="bearer")
+    token_type: str = Field(default="session_cookie")
     username: str = Field(default="")
+
+
+class AuthSessionData(BaseModel):
+    username: str = Field(default="")
+
+
+class LogoutData(BaseModel):
+    logged_out: bool = Field(default=True)
 
 
 # ------------------------------------------------------------------
