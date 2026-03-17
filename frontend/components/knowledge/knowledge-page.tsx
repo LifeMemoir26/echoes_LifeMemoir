@@ -88,6 +88,16 @@ function FileCard({ item, index }: { item: MaterialItem; index: number }) {
             <p className="mt-0.5 text-xs text-slate-400">
               存档于 {formatArchiveAtHour(item.uploaded_at)}
             </p>
+            {!isProcessing && effectiveStatus === "done" && (
+              <p className="mt-1 text-xs text-slate-500">
+                生成了 {item.chunks_count} 个分块
+              </p>
+            )}
+            {!isProcessing && effectiveStatus === "done" && item.events_count === 0 && (
+              <p className="mt-1 text-xs text-amber-600">
+                结构化已完成，但没有提取到人生事件；这类资料不能直接生成时间轴或回忆录
+              </p>
+            )}
             {isProcessing && <StructuringProgress stage={stage} />}
             {structuringError && !isProcessing && (
               <p className="mt-1 text-xs text-rose-500">{structuringError}</p>
@@ -97,7 +107,10 @@ function FileCard({ item, index }: { item: MaterialItem; index: number }) {
 
         <div className="flex flex-shrink-0 items-center gap-2">
           {effectiveStatus === "done" && (
-            <StatusBadge status="success" label="已结构化" />
+            <StatusBadge
+              status={item.events_count > 0 ? "success" : "idle"}
+              label={item.events_count > 0 ? "已结构化" : "无可用事件"}
+            />
           )}
           {effectiveStatus === "processing" && (
             <StatusBadge status="loading" label={stage ?? "处理中"} />
