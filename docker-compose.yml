@@ -1,4 +1,36 @@
 services:
+  proxy-bridge:
+    image: "${PYTHON_BASE_IMAGE:-python:3.12-slim}"
+    restart: unless-stopped
+    network_mode: host
+    command:
+      [
+        "python",
+        "/app/proxy-bridge.py",
+        "--listen-host",
+        "${DOCKER_PROXY_BRIDGE_HOST:-172.30.0.1}",
+        "--listen-port",
+        "${DOCKER_PROXY_BRIDGE_PORT:-7890}",
+        "--target-host",
+        "127.0.0.1",
+        "--target-port",
+        "${HOST_PROXY_PORT:-7890}",
+      ]
+    volumes:
+      - ./docker/proxy-bridge.py:/app/proxy-bridge.py:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, socket; s = socket.create_connection((os.environ.get('DOCKER_PROXY_BRIDGE_HOST', '172.30.0.1'), int(os.environ.get('DOCKER_PROXY_BRIDGE_PORT', '7890'))), timeout=3); s.close()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   backend:
     build:
       context: ./backend
@@ -13,10 +45,16 @@ services:
       CORS_ORIGINS: "https://${APP_DOMAIN:?APP_DOMAIN is required}"
       TRUSTED_HOSTS: "${APP_DOMAIN:?APP_DOMAIN is required},127.0.0.1,localhost,backend"
       SESSION_COOKIE_SECURE: "true"
+      EMBEDDING_PROXY: "${DOCKER_EMBEDDING_PROXY:-http://172.30.0.1:7890}"
     ports:
       - "127.0.0.1:${BACKEND_HOST_PORT:-18000}:8000"
     volumes:
       - ./data:/project/data
+    depends_on:
+      proxy-bridge:
+        condition: service_healthy
+    networks:
+      - app_net
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 30s
@@ -40,6 +78,8 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    networks:
+      - app_net
     ports:
       - "127.0.0.1:${FRONTEND_HOST_PORT:-13000}:3000"
     healthcheck:
@@ -74,7 +114,17 @@ services:
         condition: service_healthy
       frontend:
         condition: service_healthy
+    networks:
+      - app_net
 
 volumes:
   caddy_data:
   caddy_config:
+
+networks:
+  app_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${DOCKER_APP_SUBNET:-172.30.0.0/24}"
+          gateway: "${DOCKER_APP_GATEWAY:-172.30.0.1}"

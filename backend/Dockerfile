@@ -1,9 +1,11 @@
 ARG PYTHON_BASE_IMAGE=python:3.12-slim
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
 
+FROM ${UV_IMAGE} AS uv
+
 FROM ${PYTHON_BASE_IMAGE} AS builder
 
-COPY --from=${UV_IMAGE} /uv /bin/uv
+COPY --from=uv /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 WORKDIR /project/backend
