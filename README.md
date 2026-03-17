@@ -127,4 +127,4 @@ cd ../frontend && pnpm -s check:contract
 | [frontend/README.md](frontend/README.md)                             | 路由架构、组件结构、设计系统         |
 | [frontend/API_INTEGRATION.md](frontend/API_INTEGRATION.md)           | API 契约（请求/响应/SSE/错误码）     |
 
-**技术栈：** FastAPI 0.132 · LangGraph 1.0 · SQLite + sqlite-vec · Next.js 16 · React 19 · Tailwind CSS 4.2 · 七牛云 AI API · 讯飞 RTASR· Gemini Embedding
+**技术栈：** FastAPI 0.132 · LangGraph 1.0 · SQLite + sqlite-vec · Next.js 16 · React 19 · Tailwind CSS 4.2
